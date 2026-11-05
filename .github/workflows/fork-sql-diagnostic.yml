@@ -33,10 +33,6 @@ jobs:
           assert sum(int(s.attrib.get('tests', 0)) for s in suites) > 0
           assert sum(int(s.attrib.get('skipped', 0)) for s in suites) == 0, 'SQL tests must not skip'
           PY
-      - name: Intentional failure to exercise diagnostic log capture
-        run: |
-          echo "Deliberate diagnostic failure after successful SQL tests"
-          exit 1
       # The fixture uses --rm: collect before stop removes the container.
       - name: Capture SQL Server failure logs
         if: failure()
