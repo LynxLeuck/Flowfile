@@ -1,153 +1,156 @@
-name: Fork 718 upstream-mirrored final checks
+name: Fork 718 upstream UI interaction checks
 permissions:
   contents: read
-'on':
-  push:
-    branches:
-    - diagnostic/718-sqlserver-check
 jobs:
-  test-web:
+  e2e-tests:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: flowfile_frontend
+    timeout-minutes: 30
     steps:
     - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-    - name: Set up Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '22'
-        cache: npm
-        cache-dependency-path: flowfile_frontend/package-lock.json
-    - name: Install Node Dependencies
-      run: npm ci
-    - name: Run frontend unit tests (vitest)
-      run: npm run test:unit
-    - name: Build Web Version
-      run: npm run build:web
-    - name: Run Vite Preview and Check Port Availability
-      run: "# Start the preview server in the background\nnpm run preview:web &\n# Wait for the server to fully\
-        \ start\nsleep 10\n# Verify that the server responds with a 200 OK on port 4173\nif ! curl -sI http://localhost:4173\
-        \ | grep -q \"200 OK\"; then\n  echo \"Port 4173 is not available or did not return 200 OK\"\n  exit 1\n\
-        fi\n"
-    - name: Reject contribution source rewrites
-      working-directory: ${{ github.workspace }}
-      run: 'git diff --exit-code -- flowfile_core/flowfile_core/ai/safety.py flowfile_core/flowfile_core/ai/tools/executor/handlers/connections.py
-        flowfile_core/flowfile_core/flowfile/flow_graph/connections.py flowfile_core/flowfile_core/schemas/schemas.py
-        flowfile_core/tests/ai/test_executor.py flowfile_core/tests/flowfile/test_flow_graph_utils.py flowfile_frontend/src/renderer/app/composables/useDragAndDrop.ts
-        flowfile_frontend/src/renderer/app/types/flow.types.ts flowfile_frontend/src/renderer/app/utils/autoConnect.test.ts
-        flowfile_frontend/src/renderer/app/utils/autoConnect.ts flowfile_frontend/src/renderer/app/utils/nodeHandles.test.ts
-        flowfile_frontend/src/renderer/app/utils/nodeHandles.ts flowfile_frontend/src/renderer/app/views/DesignerView/Canvas.vue
-        flowfile_core/tests/test_node_ports.py flowfile_core/tests/test_node_ports_api.py flowfile_frontend/src/renderer/app/utils/connectionPorts.test.ts
-        flowfile_frontend/src/renderer/app/utils/connectionPorts.ts
-
-        git diff --check 56e236104adf80d6a71cbb36be908ab58d265784 HEAD -- flowfile_core/flowfile_core/ai/safety.py
-        flowfile_core/flowfile_core/ai/tools/executor/handlers/connections.py flowfile_core/flowfile_core/flowfile/flow_graph/connections.py
-        flowfile_core/flowfile_core/schemas/schemas.py flowfile_core/tests/ai/test_executor.py flowfile_core/tests/flowfile/test_flow_graph_utils.py
-        flowfile_frontend/src/renderer/app/composables/useDragAndDrop.ts flowfile_frontend/src/renderer/app/types/flow.types.ts
-        flowfile_frontend/src/renderer/app/utils/autoConnect.test.ts flowfile_frontend/src/renderer/app/utils/autoConnect.ts
-        flowfile_frontend/src/renderer/app/utils/nodeHandles.test.ts flowfile_frontend/src/renderer/app/utils/nodeHandles.ts
-        flowfile_frontend/src/renderer/app/views/DesignerView/Canvas.vue flowfile_core/tests/test_node_ports.py
-        flowfile_core/tests/test_node_ports_api.py flowfile_frontend/src/renderer/app/utils/connectionPorts.test.ts
-        flowfile_frontend/src/renderer/app/utils/connectionPorts.ts'
-    timeout-minutes: 25
-  linux-native:
-    name: Upstream Linux release recipe, unsigned diagnostic only
-    runs-on: ubuntu-22.04
-    timeout-minutes: 65
-    strategy:
-      matrix:
-        include:
-        - platform: ubuntu-22.04
-          target: x86_64-unknown-linux-gnu
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-    - name: Set up Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '20'
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-    - name: Set up Rust
-      uses: dtolnay/rust-toolchain@stable
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
       with:
-        targets: ${{ matrix.target }}
-    - name: Cache cargo registry & target
-      uses: Swatinem/rust-cache@v2
-      with:
-        workspaces: flowfile_frontend/src-tauri
-    - name: Install Linux WebKit dependencies
-      if: matrix.platform == 'ubuntu-22.04'
-      run: "sudo apt-get update\nsudo apt-get install -y \\\n  libwebkit2gtk-4.1-dev \\\n  build-essential \\\n\
-        \  curl \\\n  wget \\\n  file \\\n  libssl-dev \\\n  libayatana-appindicator3-dev \\\n  librsvg2-dev \\\n\
-        \  patchelf\n\nsudo apt-get install -y xvfb xauth dbus-x11\n"
+        node-version: '20'
+        cache: npm
+        cache-dependency-path: flowfile_frontend/package-lock.json
     - name: Install Poetry
-      run: pip install poetry
-    - name: Install Python deps
-      run: poetry install --with build,runtime64 --no-interaction --no-ansi
-    - name: Scoped Ruff and contribution whitespace checks
-      run: 'poetry run ruff check flowfile_core/flowfile_core/ai/safety.py flowfile_core/flowfile_core/ai/tools/executor/handlers/connections.py
-        flowfile_core/flowfile_core/flowfile/flow_graph/connections.py flowfile_core/flowfile_core/schemas/schemas.py
-        flowfile_core/tests/ai/test_executor.py flowfile_core/tests/flowfile/test_flow_graph_utils.py flowfile_core/tests/test_node_ports.py
-        flowfile_core/tests/test_node_ports_api.py
+      run: 'pip install poetry
 
-        git diff --check 56e236104adf80d6a71cbb36be908ab58d265784 HEAD'
-    - name: Build Python services (PyInstaller)
-      run: poetry run build_backends
-    - name: Verify the kernel image manifest is in the bundle
-      shell: bash
-      run: test -f services_dist/_internal/flowfile_core/kernel/kernel_image_manifest.json
-    - name: Stage sidecars for Tauri
-      run: poetry run python tools/rename_sidecar.py --triple ${{ matrix.target }}
-    - name: Install frontend deps
+        poetry config virtualenvs.create true
+
+        poetry config virtualenvs.in-project true
+
+        '
+    - name: Check poetry.lock is up to date
+      run: poetry check --lock
+    - name: Cache Poetry dependencies
+      uses: actions/cache@v4
+      with:
+        path: .venv
+        key: poetry-${{ runner.os }}-${{ hashFiles('poetry.lock') }}
+        restore-keys: 'poetry-${{ runner.os }}-
+
+          '
+    - name: Install backend dependencies
+      run: poetry install --no-interaction --no-ansi
+    - name: Install frontend dependencies
       working-directory: flowfile_frontend
       run: npm ci
-    - name: Build Tauri app
+    - name: Install Playwright browsers
       working-directory: flowfile_frontend
-      run: npx tauri build --target ${{ matrix.target }} --bundles deb --no-sign --config '{"bundle":{"createUpdaterArtifacts":false}}'
-        -- --locked
-    - name: Smoke test the packaged app (diagnostic extension, not upstream coverage)
-      run: 'python - <<''PY''
+      run: npx playwright install --with-deps chromium
+    - name: Build frontend
+      working-directory: flowfile_frontend
+      run: npm run build:web
+    - name: Start MinIO and seed the cloud E2E source
+      run: 'poetry run start_minio
 
-        import pathlib, subprocess, os
+        poetry run seed_cloud_e2e
 
-        packages=list(pathlib.Path(''flowfile_frontend/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb'').glob(''*.deb''))
+        '
+    - name: Write the MinIO AWS profile and server working directories
+      run: "mkdir -p \"$RUNNER_TEMP/aws\" \"$RUNNER_TEMP/core_cwd\" \"$RUNNER_TEMP/worker_cwd\"\nprintf '[default]\\\
+        naws_access_key_id = minioadmin\\naws_secret_access_key = minioadmin\\n' > \"$RUNNER_TEMP/aws/credentials\"\
+        \nprintf '[default]\\nregion = us-east-1\\n' > \"$RUNNER_TEMP/aws/config\"\n{\n  echo \"AWS_SHARED_CREDENTIALS_FILE=$RUNNER_TEMP/aws/credentials\"\
+        \n  echo \"AWS_CONFIG_FILE=$RUNNER_TEMP/aws/config\"\n  echo \"AWS_ENDPOINT_URL=http://localhost:9000\"\n\
+        \  echo \"AWS_ALLOW_HTTP=true\"\n  echo \"AWS_EC2_METADATA_DISABLED=true\"\n} >> \"$GITHUB_ENV\"\n"
+    - name: Start backend server
+      working-directory: ${{ runner.temp }}/core_cwd
+      env:
+        FLOWFILE_TELEMETRY: '0'
+        FLOWFILE_EXCHANGE_URI: s3://flowfile-e2e/placement-exchange
+      run: "poetry -P \"$GITHUB_WORKSPACE\" run flowfile_core > \"$RUNNER_TEMP/core.log\" 2>&1 &\necho \"Waiting\
+        \ for backend to start...\"\nfor i in {1..30}; do\n  if curl -s http://localhost:63578/auth/token -X POST\
+        \ > /dev/null 2>&1; then\n    echo \"Backend is ready!\"\n    break\n  fi\n  echo \"Attempt $i: Backend\
+        \ not ready yet...\"\n  sleep 2\ndone\n"
+    - name: Start worker server
+      working-directory: ${{ runner.temp }}/worker_cwd
+      run: "poetry -P \"$GITHUB_WORKSPACE\" run flowfile_worker > \"$RUNNER_TEMP/worker.log\" 2>&1 &\necho \"Waiting\
+        \ for worker to start...\"\nfor i in {1..30}; do\n  if curl -s http://localhost:63579/docs > /dev/null 2>&1;\
+        \ then\n    echo \"Worker is ready!\"\n    break\n  fi\n  echo \"Attempt $i: Worker not ready yet...\"\n\
+        \  sleep 2\ndone\n"
+    - name: Start frontend preview server
+      working-directory: flowfile_frontend
+      run: "npm run preview:web &\necho \"Waiting for frontend to start...\"\nfor i in {1..15}; do\n  if curl -s\
+        \ http://localhost:4173 > /dev/null 2>&1; then\n    echo \"Frontend is ready!\"\n    break\n  fi\n  echo\
+        \ \"Attempt $i: Frontend not ready yet...\"\n  sleep 2\ndone\n"
+    - name: Run E2E tests
+      working-directory: flowfile_frontend
+      env:
+        TEST_URL: http://localhost:4173
+        API_URL: http://localhost:63578
+        E2E_AWS_PROFILE_CONFIGURED: '1'
+      run: npx playwright test tests/web-flow.spec.ts tests/node-handle-labels.spec.ts --reporter=html,json > playwright-results.json
+    - name: Require executed UI tests without skips or failures
+      working-directory: flowfile_frontend
+      run: 'node - <<''JS''
 
-        assert len(packages)==1,packages
+        const assert = require(''node:assert/strict'');
 
-        subprocess.run([''python'',''.github/diagnostics/native-startup.py'',''--package'',str(packages[0]),''--results'',os.environ[''RUNNER_TEMP'']+''/native-smoke''],check=True)
+        const report = require(''./playwright-results.json'');
 
-        PY'
-    - name: Reject contribution source rewrites
-      run: 'git diff --exit-code -- flowfile_core/flowfile_core/ai/safety.py flowfile_core/flowfile_core/ai/tools/executor/handlers/connections.py
-        flowfile_core/flowfile_core/flowfile/flow_graph/connections.py flowfile_core/flowfile_core/schemas/schemas.py
-        flowfile_core/tests/ai/test_executor.py flowfile_core/tests/flowfile/test_flow_graph_utils.py flowfile_frontend/src/renderer/app/composables/useDragAndDrop.ts
-        flowfile_frontend/src/renderer/app/types/flow.types.ts flowfile_frontend/src/renderer/app/utils/autoConnect.test.ts
-        flowfile_frontend/src/renderer/app/utils/autoConnect.ts flowfile_frontend/src/renderer/app/utils/nodeHandles.test.ts
-        flowfile_frontend/src/renderer/app/utils/nodeHandles.ts flowfile_frontend/src/renderer/app/views/DesignerView/Canvas.vue
-        flowfile_core/tests/test_node_ports.py flowfile_core/tests/test_node_ports_api.py flowfile_frontend/src/renderer/app/utils/connectionPorts.test.ts
-        flowfile_frontend/src/renderer/app/utils/connectionPorts.ts
+        assert(report.stats.expected > 0, ''No passing UI tests'');
 
-        git diff --check 56e236104adf80d6a71cbb36be908ab58d265784 HEAD -- flowfile_core/flowfile_core/ai/safety.py
-        flowfile_core/flowfile_core/ai/tools/executor/handlers/connections.py flowfile_core/flowfile_core/flowfile/flow_graph/connections.py
-        flowfile_core/flowfile_core/schemas/schemas.py flowfile_core/tests/ai/test_executor.py flowfile_core/tests/flowfile/test_flow_graph_utils.py
-        flowfile_frontend/src/renderer/app/composables/useDragAndDrop.ts flowfile_frontend/src/renderer/app/types/flow.types.ts
-        flowfile_frontend/src/renderer/app/utils/autoConnect.test.ts flowfile_frontend/src/renderer/app/utils/autoConnect.ts
-        flowfile_frontend/src/renderer/app/utils/nodeHandles.test.ts flowfile_frontend/src/renderer/app/utils/nodeHandles.ts
-        flowfile_frontend/src/renderer/app/views/DesignerView/Canvas.vue flowfile_core/tests/test_node_ports.py
-        flowfile_core/tests/test_node_ports_api.py flowfile_frontend/src/renderer/app/utils/connectionPorts.test.ts
-        flowfile_frontend/src/renderer/app/utils/connectionPorts.ts'
-    - name: Upload compact startup evidence
+        assert.equal(report.stats.skipped, 0, ''Unexpected skipped UI tests'');
+
+        assert.equal(report.stats.unexpected, 0, ''Failed UI tests'');
+
+        assert.equal(report.stats.flaky, 0, ''Flaky UI tests'');
+
+        console.log(JSON.stringify(report.stats));
+
+        JS'
+    - name: Issue 718 real drag and persistence regression
+      env:
+        FLOWFILE_CHECKOUT: ${{ github.workspace }}
+        TEST_URL: http://localhost:4173
+        API_URL: http://localhost:63578
+        BROWSER_RESULTS: ${{ runner.temp }}/ports-ui
+      run: node .github/diagnostics/browser-ports-smoke.cjs
+    - name: Check the servers wrote nothing into their working directories
+      if: success() || failure()
+      run: "status=0\nfor dir in core_cwd worker_cwd; do\n  if [ -d \"$RUNNER_TEMP/$dir\" ] && [ -n \"$(ls -A \"\
+        $RUNNER_TEMP/$dir\")\" ]; then\n    echo \"::error::Files were written into the server working directory\
+        \ $dir:\"\n    ls -laR \"$RUNNER_TEMP/$dir\"\n    status=1\n  fi\ndone\nexit $status\n"
+    - name: Upload Playwright report
+      uses: actions/upload-artifact@v4
+      if: failure()
+      with:
+        name: playwright-report
+        path: flowfile_frontend/playwright-report/
+        retention-days: 7
+    - name: Upload server logs
+      uses: actions/upload-artifact@v4
+      if: failure()
+      with:
+        name: server-logs
+        path: '${{ runner.temp }}/core.log
+
+          ${{ runner.temp }}/worker.log
+
+          '
+        retention-days: 7
+    - name: Upload test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: test-results
+        path: flowfile_frontend/test-results/
+        retention-days: 7
+    - name: Upload interaction evidence
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: native-startup-evidence
-        path: ${{ runner.temp }}/native-smoke/result.json
-        if-no-files-found: warn
+        name: ports-ui-evidence
+        path: '${{ runner.temp }}/ports-ui/
+
+          flowfile_frontend/playwright-results.json'
+        retention-days: 7
+'on':
+  push:
+    branches:
+    - diagnostic/718-sqlserver-check
