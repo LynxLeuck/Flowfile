@@ -11,7 +11,10 @@ export function freeInputHandles(
   legacyMultiple: boolean,
 ): string[] {
   return handles
-    .filter((h) => h.position === Position.Left && ((h.multiple ?? legacyMultiple) || !occupied.has(h.id)))
+    .filter(
+      (h) =>
+        h.position === Position.Left && ((h.multiple ?? legacyMultiple) || !occupied.has(h.id)),
+    )
     .map((h) => h.id);
 }
 

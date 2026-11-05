@@ -702,6 +702,7 @@ class NodePort(NodeOutputPort):
     kind: Literal["data", "parameter"] = "data"
     required: bool = False
     multiple: bool = False
+    hidden: bool = False
 
 
 class NodeTemplate(BaseModel):
@@ -758,9 +759,8 @@ class NodeTemplate(BaseModel):
         names = getattr(self, "input_names", None)
         if self.dynamic_inputs or names is not None:
             return [
-                NodePort(id=f"input-{i}", name=name, kind="parameter" if i == 0 else "data")
-                for i, name in enumerate(names or [])
-                if i != 0 or name
+                NodePort(id=f"input-{i}", name=name, kind="parameter" if i == 0 else "data", hidden=i == 0 and not name)
+                for i, name in enumerate(names or [""])
             ]
         return [
             NodePort(

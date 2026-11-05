@@ -152,9 +152,21 @@ export interface LocalFileInfo {
 
 // Node Template Types (for flow designer)
 
+export interface OutputPort {
+  id: string;
+  name: string | null;
+}
+
+export interface InputPort extends OutputPort {
+  hidden?: boolean;
+  kind: "data" | "parameter";
+  multiple: boolean;
+  required: boolean;
+}
+
 export interface NodeTemplate {
-  inputs?: import("../utils/nodeHandles").InputPort[];
-  outputs?: import("../utils/nodeHandles").OutputPort[];
+  inputs?: InputPort[];
+  outputs?: OutputPort[];
   name: string;
   color: string;
   item: string;

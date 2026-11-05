@@ -60,3 +60,40 @@ describe("connection port validation", () => {
     ).not.toBeNull();
   });
 });
+
+it("rejects different static source outputs into the same target", () => {
+  const outputs = { outputs: [source.outputs[0], { id: "output-1", position: Position.Right }] };
+  const next = { ...connection, sourceHandle: "output-1", targetHandle: "input-1" };
+  const join = { inputs: [...target.inputs, { ...target.inputs[0], id: "input-1" }] };
+  expect(connectionPortError(next, outputs, join, [connection])).not.toBeNull();
+  expect(
+    connectionPortError(
+      next,
+      outputs,
+      { ...join, nodeTemplate: { name: "Run", multi: false, dynamic_inputs: true } },
+      [connection],
+    ),
+  ).toBeNull();
+});
+
+it("accepts restoration on a declared hidden reserved parameter port", () => {
+  const hidden = {
+    inputs: [],
+    nodeTemplate: {
+      name: "Run",
+      multi: false,
+      dynamic_inputs: true,
+      inputs: [
+        {
+          id: "input-0",
+          name: "",
+          kind: "parameter" as const,
+          hidden: true,
+          multiple: false,
+          required: false,
+        },
+      ],
+    },
+  };
+  expect(connectionPortError(connection, source, hidden, [connection])).toBeNull();
+});
