@@ -119,9 +119,10 @@ def validate_connection(
             "would_create_cycle",
             f"Connecting node {from_node.node_id} -> {to_node.node_id} would create a cycle",
         )
+    inputs = to_node.get_node_input().inputs if input_handle is not None else []
     for node, handle, ports in (
         (from_node, output_handle, from_node.get_node_input().outputs if output_handle is not None else []),
-        (to_node, input_handle, to_node.get_node_input().inputs if input_handle is not None else []),
+        (to_node, input_handle, inputs),
     ):
         if handle is not None and not any(port.id == handle for port in ports):
             return ConnectionValidationError(
@@ -129,7 +130,7 @@ def validate_connection(
                 f"Handle {handle} is not available on node {node.node_id}",
             )
     if input_handle is not None and not replacing:
-        port = next(port for port in to_node.get_node_input().inputs if port.id == input_handle)
+        port = next(port for port in inputs if port.id == input_handle)
         for occupant in to_node.all_inputs:
             existing = to_node.input_edge_handle(occupant.node_id, input_handle)
             if (

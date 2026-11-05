@@ -1,5 +1,6 @@
 import type { Connection } from "@vue-flow/core";
 import type { NodeHandle, NodeTemplate } from "../types/flow.types";
+import { DEFAULT_OUTPUT_HANDLE } from "./outputHandle";
 
 type PortNode = {
   inputs?: NodeHandle[];
@@ -16,7 +17,7 @@ export function connectionPortError(
   edges: readonly Connection[],
 ): string | null {
   if (!source || !target) return "Connection node is unavailable";
-  const sourceHandle = connection.sourceHandle ?? "output-0";
+  const sourceHandle = connection.sourceHandle ?? DEFAULT_OUTPUT_HANDLE;
   const targetHandle = connection.targetHandle ?? "input-0";
   if (source.outputs && !source.outputs.some((port) => port.id === sourceHandle)) {
     return "Output is not available on this node";
@@ -34,7 +35,7 @@ export function connectionPortError(
       (edge) =>
         edge.source === connection.source &&
         edge.target === connection.target &&
-        (edge.sourceHandle ?? "output-0") !== sourceHandle,
+        (edge.sourceHandle ?? DEFAULT_OUTPUT_HANDLE) !== sourceHandle,
     )
   ) {
     return "Target already reads a different output of this source";
@@ -47,7 +48,10 @@ export function connectionPortError(
       (edge) =>
         edge.target === connection.target &&
         (edge.targetHandle ?? "input-0") === targetHandle &&
-        !(edge.source === connection.source && (edge.sourceHandle ?? "output-0") === sourceHandle),
+        !(
+          edge.source === connection.source &&
+          (edge.sourceHandle ?? DEFAULT_OUTPUT_HANDLE) === sourceHandle
+        ),
     )
   ) {
     return `Input on "${target.nodeTemplate?.name ?? connection.target}" already has a connection — remove it first`;

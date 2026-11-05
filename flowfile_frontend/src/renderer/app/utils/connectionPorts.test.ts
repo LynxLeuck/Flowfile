@@ -23,18 +23,12 @@ describe("connection port validation", () => {
 
   it("uses per-port multiplicity rather than the legacy node-wide flag", () => {
     expect(connectionPortError(connection, source, target, occupied)).not.toBeNull();
-    expect(
-      connectionPortError(
-        connection,
-        source,
-        {
-          ...target,
-          inputs: [{ ...target.inputs[0], multiple: true }],
-          nodeTemplate: { name: "Target", multi: false },
-        },
-        occupied,
-      ),
-    ).toBeNull();
+    const multiple = {
+      ...target,
+      inputs: [{ ...target.inputs[0], multiple: true }],
+      nodeTemplate: { name: "Target", multi: false },
+    };
+    expect(connectionPortError(connection, source, multiple, occupied)).toBeNull();
   });
 
   it("does not count the same restored connection as occupying its handle", () => {
@@ -47,17 +41,8 @@ describe("connection port validation", () => {
       nodeTemplate: { name: "Union", multi: true },
     };
     expect(connectionPortError(connection, source, legacy, occupied)).toBeNull();
-    expect(
-      connectionPortError(
-        connection,
-        source,
-        {
-          ...legacy,
-          nodeTemplate: { ...legacy.nodeTemplate, dynamic_inputs: true },
-        },
-        occupied,
-      ),
-    ).not.toBeNull();
+    const dynamic = { ...legacy, nodeTemplate: { ...legacy.nodeTemplate, dynamic_inputs: true } };
+    expect(connectionPortError(connection, source, dynamic, occupied)).not.toBeNull();
   });
 });
 
@@ -66,14 +51,8 @@ it("rejects different static source outputs into the same target", () => {
   const next = { ...connection, sourceHandle: "output-1", targetHandle: "input-1" };
   const join = { inputs: [...target.inputs, { ...target.inputs[0], id: "input-1" }] };
   expect(connectionPortError(next, outputs, join, [connection])).not.toBeNull();
-  expect(
-    connectionPortError(
-      next,
-      outputs,
-      { ...join, nodeTemplate: { name: "Run", multi: false, dynamic_inputs: true } },
-      [connection],
-    ),
-  ).toBeNull();
+  const dynamic = { ...join, nodeTemplate: { name: "Run", multi: false, dynamic_inputs: true } };
+  expect(connectionPortError(next, outputs, dynamic, [connection])).toBeNull();
 });
 
 it("accepts restoration on a declared hidden reserved parameter port", () => {
