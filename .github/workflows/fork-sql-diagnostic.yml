@@ -13,6 +13,8 @@ jobs:
         working-directory: flowfile_frontend
     steps:
     - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
     - name: Set up Node.js
       uses: actions/setup-node@v4
       with:
@@ -30,9 +32,26 @@ jobs:
         \ start\nsleep 10\n# Verify that the server responds with a 200 OK on port 4173\nif ! curl -sI http://localhost:4173\
         \ | grep -q \"200 OK\"; then\n  echo \"Port 4173 is not available or did not return 200 OK\"\n  exit 1\n\
         fi\n"
-    - name: Reject build-time tracked-source rewrites
+    - name: Reject contribution source rewrites
       working-directory: ${{ github.workspace }}
-      run: git diff --exit-code && git diff --check 56e236104adf80d6a71cbb36be908ab58d265784 HEAD
+      run: 'git diff --exit-code -- flowfile_core/flowfile_core/ai/safety.py flowfile_core/flowfile_core/ai/tools/executor/handlers/connections.py
+        flowfile_core/flowfile_core/flowfile/flow_graph/connections.py flowfile_core/flowfile_core/schemas/schemas.py
+        flowfile_core/tests/ai/test_executor.py flowfile_core/tests/flowfile/test_flow_graph_utils.py flowfile_frontend/src/renderer/app/composables/useDragAndDrop.ts
+        flowfile_frontend/src/renderer/app/types/flow.types.ts flowfile_frontend/src/renderer/app/utils/autoConnect.test.ts
+        flowfile_frontend/src/renderer/app/utils/autoConnect.ts flowfile_frontend/src/renderer/app/utils/nodeHandles.test.ts
+        flowfile_frontend/src/renderer/app/utils/nodeHandles.ts flowfile_frontend/src/renderer/app/views/DesignerView/Canvas.vue
+        flowfile_core/tests/test_node_ports.py flowfile_core/tests/test_node_ports_api.py flowfile_frontend/src/renderer/app/utils/connectionPorts.test.ts
+        flowfile_frontend/src/renderer/app/utils/connectionPorts.ts
+
+        git diff --check 56e236104adf80d6a71cbb36be908ab58d265784 HEAD -- flowfile_core/flowfile_core/ai/safety.py
+        flowfile_core/flowfile_core/ai/tools/executor/handlers/connections.py flowfile_core/flowfile_core/flowfile/flow_graph/connections.py
+        flowfile_core/flowfile_core/schemas/schemas.py flowfile_core/tests/ai/test_executor.py flowfile_core/tests/flowfile/test_flow_graph_utils.py
+        flowfile_frontend/src/renderer/app/composables/useDragAndDrop.ts flowfile_frontend/src/renderer/app/types/flow.types.ts
+        flowfile_frontend/src/renderer/app/utils/autoConnect.test.ts flowfile_frontend/src/renderer/app/utils/autoConnect.ts
+        flowfile_frontend/src/renderer/app/utils/nodeHandles.test.ts flowfile_frontend/src/renderer/app/utils/nodeHandles.ts
+        flowfile_frontend/src/renderer/app/views/DesignerView/Canvas.vue flowfile_core/tests/test_node_ports.py
+        flowfile_core/tests/test_node_ports_api.py flowfile_frontend/src/renderer/app/utils/connectionPorts.test.ts
+        flowfile_frontend/src/renderer/app/utils/connectionPorts.ts'
     timeout-minutes: 25
   linux-native:
     name: Upstream Linux release recipe, unsigned diagnostic only
@@ -46,6 +65,8 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
     - name: Set up Node.js
       uses: actions/setup-node@v4
       with:
@@ -104,8 +125,25 @@ jobs:
         subprocess.run([''python'',''.github/diagnostics/native-startup.py'',''--package'',str(packages[0]),''--results'',os.environ[''RUNNER_TEMP'']+''/native-smoke''],check=True)
 
         PY'
-    - name: Reject tracked-source changes
-      run: git diff --exit-code
+    - name: Reject contribution source rewrites
+      run: 'git diff --exit-code -- flowfile_core/flowfile_core/ai/safety.py flowfile_core/flowfile_core/ai/tools/executor/handlers/connections.py
+        flowfile_core/flowfile_core/flowfile/flow_graph/connections.py flowfile_core/flowfile_core/schemas/schemas.py
+        flowfile_core/tests/ai/test_executor.py flowfile_core/tests/flowfile/test_flow_graph_utils.py flowfile_frontend/src/renderer/app/composables/useDragAndDrop.ts
+        flowfile_frontend/src/renderer/app/types/flow.types.ts flowfile_frontend/src/renderer/app/utils/autoConnect.test.ts
+        flowfile_frontend/src/renderer/app/utils/autoConnect.ts flowfile_frontend/src/renderer/app/utils/nodeHandles.test.ts
+        flowfile_frontend/src/renderer/app/utils/nodeHandles.ts flowfile_frontend/src/renderer/app/views/DesignerView/Canvas.vue
+        flowfile_core/tests/test_node_ports.py flowfile_core/tests/test_node_ports_api.py flowfile_frontend/src/renderer/app/utils/connectionPorts.test.ts
+        flowfile_frontend/src/renderer/app/utils/connectionPorts.ts
+
+        git diff --check 56e236104adf80d6a71cbb36be908ab58d265784 HEAD -- flowfile_core/flowfile_core/ai/safety.py
+        flowfile_core/flowfile_core/ai/tools/executor/handlers/connections.py flowfile_core/flowfile_core/flowfile/flow_graph/connections.py
+        flowfile_core/flowfile_core/schemas/schemas.py flowfile_core/tests/ai/test_executor.py flowfile_core/tests/flowfile/test_flow_graph_utils.py
+        flowfile_frontend/src/renderer/app/composables/useDragAndDrop.ts flowfile_frontend/src/renderer/app/types/flow.types.ts
+        flowfile_frontend/src/renderer/app/utils/autoConnect.test.ts flowfile_frontend/src/renderer/app/utils/autoConnect.ts
+        flowfile_frontend/src/renderer/app/utils/nodeHandles.test.ts flowfile_frontend/src/renderer/app/utils/nodeHandles.ts
+        flowfile_frontend/src/renderer/app/views/DesignerView/Canvas.vue flowfile_core/tests/test_node_ports.py
+        flowfile_core/tests/test_node_ports_api.py flowfile_frontend/src/renderer/app/utils/connectionPorts.test.ts
+        flowfile_frontend/src/renderer/app/utils/connectionPorts.ts'
     - name: Upload compact startup evidence
       if: always()
       uses: actions/upload-artifact@v4

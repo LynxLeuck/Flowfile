@@ -2,7 +2,12 @@
 
 import { describe, it, expect } from "vitest";
 import { Position } from "@vue-flow/core";
-import { findAutoConnectMatch, freeInputHandles, preferUnusedOutputs, type AutoConnectNode } from "./autoConnect";
+import {
+  findAutoConnectMatch,
+  freeInputHandles,
+  preferUnusedOutputs,
+  type AutoConnectNode,
+} from "./autoConnect";
 
 it("uses per-port multiplicity without changing legacy handle behavior", () => {
   const handles = [
@@ -10,10 +15,10 @@ it("uses per-port multiplicity without changing legacy handle behavior", () => {
     { id: "input-1", position: Position.Left, multiple: false },
     { id: "input-2", position: Position.Bottom, multiple: true },
   ];
-  expect(freeInputHandles(handles, new Set(["input-0", "input-1"]), false))
-    .toEqual(["input-0"]);
-  expect(freeInputHandles([{ id: "input-0", position: Position.Left }], new Set(["input-0"]), true))
-    .toEqual(["input-0"]);
+  expect(freeInputHandles(handles, new Set(["input-0", "input-1"]), false)).toEqual(["input-0"]);
+  expect(
+    freeInputHandles([{ id: "input-0", position: Position.Left }], new Set(["input-0"]), true),
+  ).toEqual(["input-0"]);
 });
 
 // 60x60 node at (100, 100): output anchor (160, 130), input anchor (100, 130).
