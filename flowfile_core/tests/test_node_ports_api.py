@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from flowfile_core.schemas.input_schema import NodeConnection
 from test_utils.services import flow_document, running_services
 
 
@@ -14,7 +15,9 @@ def test_editor_enforces_serialized_ports_without_mutating_rejected_edges(tmp_pa
         palette = {node["item"]: node for node in services.get("/node_list")}
         assert palette["manual_input"]["inputs"] == []
         assert palette["manual_input"]["outputs"] == [{"id": "output-0", "name": None}]
-        assert [port["id"] for port in palette["select"]["inputs"]] == ["input-0"]
+        assert palette["select"]["inputs"] == [
+            {"id": "input-0", "name": None, "kind": "data", "required": True, "multiple": False, "hidden": False}
+        ]
         flow_id = services.import_flow(
             flow_document(
                 718,
@@ -33,10 +36,9 @@ def test_editor_enforces_serialized_ports_without_mutating_rejected_edges(tmp_pa
             return services.http.post(
                 f"{services.base}/editor/connect_node/",
                 params={"flow_id": flow_id},
-                json={
-                    "output_connection": {"node_id": source, "connection_class": output},
-                    "input_connection": {"node_id": target, "connection_class": input_handle},
-                },
+                json=NodeConnection.create_from_simple_input(
+                    source, target, input_type=input_handle, output_handle=output
+                ).model_dump(mode="json"),
                 timeout=10,
             )
 

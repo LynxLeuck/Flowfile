@@ -1,37 +1,26 @@
 """Declarative ports serialize from existing template definitions."""
 
-from pydantic import TypeAdapter
+import pytest
 
+from flowfile_core.configs.node_store.nodes import get_all_standard_nodes
 from flowfile_core.schemas.schemas import NodeInput, NodeTemplate
 
 
-def template(**overrides):
-    return NodeTemplate(
-        **(
-            dict(
-                name="Example",
-                item="example",
-                input=1,
-                output=1,
-                image="example.svg",
-                node_type="process",
-                transform_type="narrow",
-                node_group="transform",
-            )
-            | overrides
-        )
-    )
+@pytest.fixture
+def standard_nodes():
+    return get_all_standard_nodes()[1]
 
 
-def test_effective_ports_preserve_union_and_optional_control_contracts():
-    union = template(input=10, multi=True)
+def test_effective_ports_preserve_union_and_optional_control_contracts(standard_nodes):
+    union = standard_nodes["union"]
     assert [(p.id, p.multiple, p.required) for p in union.inputs] == [("input-0", True, True)]
-    gate = template(input=2, min_inputs=1, control_input_indices=[1], input_labels=["Data", "Control"])
+    gate = standard_nodes["gate"]
     assert [(p.kind, p.required) for p in gate.inputs] == [("data", True), ("parameter", False)]
+    assert [p.name for p in gate.inputs] == gate.input_labels
 
 
-def test_dynamic_instance_serialization_recomputes_without_mutating_palette():
-    palette = template(dynamic_inputs=True)
+def test_dynamic_instance_serialization_recomputes_without_mutating_palette(standard_nodes):
+    palette = standard_nodes["run_flow"]
     assert [(p.id, p.hidden) for p in palette.inputs] == [("input-0", True)]
     assert palette.outputs == []
     node = NodeInput(**palette.__dict__, id=7, pos_x=0, pos_y=0, input_names=["", "Orders"])
@@ -48,13 +37,10 @@ def test_dynamic_instance_serialization_recomputes_without_mutating_palette():
     assert palette.outputs == []
 
 
-def test_standard_definitions_are_not_mutated_by_port_serialization():
+def test_standard_definitions_are_not_mutated_by_port_serialization(standard_nodes):
     from copy import deepcopy
 
-    from flowfile_core.configs.node_store.nodes import get_all_standard_nodes
-
-    _, registry, _ = get_all_standard_nodes()
-    for node in registry.values():
+    for node in standard_nodes.values():
         before = deepcopy(node.__dict__)
         data = node.model_dump(mode="json")
         assert node.__dict__ == before, node.item
@@ -70,12 +56,3 @@ def test_standard_definitions_are_not_mutated_by_port_serialization():
         restored = NodeTemplate.model_validate(data | {"inputs": [], "outputs": []})
         assert restored.inputs == node.inputs
         assert restored.outputs == node.outputs
-
-
-def test_palette_serializes_static_ports():
-    node = template(input_labels=["Data"])
-    data = TypeAdapter(list[NodeTemplate]).dump_python([node], mode="json")[0]
-    assert data["inputs"] == [
-        {"id": "input-0", "name": "Data", "kind": "data", "required": True, "multiple": False, "hidden": False}
-    ]
-    assert data["outputs"] == [{"id": "output-0", "name": None}]
