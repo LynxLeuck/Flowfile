@@ -94,6 +94,7 @@ def validate_connection(
     from_node: FlowNode,
     to_node: FlowNode,
     output_handle: str | None = None,
+    input_handle: str | None = None,
 ) -> ConnectionValidationError | None:
     """Non-mutating topology check for from_node -> to_node; None when valid.
 
@@ -113,6 +114,19 @@ def validate_connection(
             "would_create_cycle",
             f"Connecting node {from_node.node_id} -> {to_node.node_id} would create a cycle",
         )
+    for node, handle, ports in (
+        (from_node, output_handle, from_node.get_node_input().outputs if output_handle is not None else []),
+        (to_node, input_handle, to_node.get_node_input().inputs if input_handle is not None else []),
+    ):
+        # run_flow has always accepted its reserved parameter slot even when
+        # no parameter label is configured (and the canvas hides that pip).
+        if node is to_node and node.accepts_dynamic_inputs and handle == "input-0":
+            continue
+        if handle is not None and not any(port.id == handle for port in ports):
+            return ConnectionValidationError(
+                "handle_not_available",
+                f"Handle {handle} is not available on node {node.node_id}",
+            )
     if output_handle is not None:
         existing_handle = live_source_handle(to_node, from_node.node_id)
         if existing_handle is not None and existing_handle != output_handle:
@@ -148,7 +162,12 @@ def add_connection(flow: FlowGraph, node_connection: input_schema.NodeConnection
             if not n
         ]
         raise HTTPException(404, f"Node(s) not found: {', '.join(missing)}")
-    error = validate_connection(from_node, to_node, node_connection.output_connection.connection_class)
+    error = validate_connection(
+        from_node,
+        to_node,
+        node_connection.output_connection.connection_class,
+        node_connection.input_connection.connection_class,
+    )
     if error is not None:
         raise HTTPException(422, error.detail)
     if to_node.accepts_dynamic_inputs:
@@ -183,7 +202,7 @@ def insert_node_on_edge(flow: FlowGraph, node_id: int, node_connection: input_sc
     from_node, to_node = flow.get_node(source_id), flow.get_node(target_id)
     if from_node is None or to_node is None or to_node.input_edge_handle(source_id, slot) != source_handle:
         raise HTTPException(422, "Connection does not exist on the input node")
-    error = validate_connection(node, to_node, DEFAULT_OUTPUT_HANDLE)
+    error = validate_connection(node, to_node, DEFAULT_OUTPUT_HANDLE, slot)
     if error is not None:
         raise HTTPException(422, error.detail)
     add_connection(
@@ -239,10 +258,8 @@ def _add_keyed_connection_validated(
     handle = node_connection.input_connection.connection_class
     if isinstance(to_node.setting_input, input_schema.NodePromise):
         raise HTTPException(422, "Configure the node before connecting inputs")
-    slot_count = len(getattr(to_node.setting_input, "input_slots", None) or [])
-    if input_handle_index(handle) > slot_count:
-        raise HTTPException(422, f"Handle {handle} is not available on node {to_node.node_id}")
-    if to_node.node_inputs.keyed_inputs and handle in to_node.node_inputs.keyed_inputs:
+    port = next((port for port in to_node.get_node_input().inputs if port.id == handle), None)
+    if not (port and port.multiple) and to_node.node_inputs.keyed_inputs and handle in to_node.node_inputs.keyed_inputs:
         raise HTTPException(422, f"Handle {handle} already has a connection")
     to_node.add_node_connection(
         from_node,
