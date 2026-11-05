@@ -153,6 +153,8 @@ export interface LocalFileInfo {
 // Node Template Types (for flow designer)
 
 export interface NodeTemplate {
+  inputs?: import("../utils/nodeHandles").InputPort[];
+  outputs?: import("../utils/nodeHandles").OutputPort[];
   name: string;
   color: string;
   item: string;
@@ -199,6 +201,8 @@ export interface NodeInput extends NodeTemplate {
 // Handle Types
 
 export interface NodeHandle {
+  multiple?: boolean;
+  required?: boolean;
   id: string;
   position: Position;
   label?: string;

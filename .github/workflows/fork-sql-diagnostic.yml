@@ -1,0 +1,45 @@
+name: Fork SQL Server diagnostic
+on:
+  push:
+    branches: [diagnostic/718-sqlserver-check]
+permissions:
+  contents: read
+jobs:
+  sqlserver:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install existing project dependencies
+        run: |
+          pip install poetry
+          poetry install --no-interaction --no-ansi --with dev
+      - name: Start project SQL Server and verify readiness
+        run: |
+          uname -m
+          docker info --format '{{.Architecture}}'
+          poetry run start_mssql
+          poetry run python -c 'from test_utils.mssql.fixtures import can_connect_to_db; assert can_connect_to_db(), "SQL Server is not ready"'
+      - name: Run existing SQL Server tests
+        run: |
+          poetry run pytest flowfile_core/tests/flowfile/external_sources/test_mssql_source.py --confcutdir=flowfile_core/tests/flowfile/external_sources -ra --junitxml=sqlserver-results.xml
+          poetry run python - <<'PY'
+          import xml.etree.ElementTree as ET
+          suites = ET.parse('sqlserver-results.xml').getroot().iter('testsuite')
+          suites = list(suites)
+          assert sum(int(s.attrib.get('tests', 0)) for s in suites) > 0
+          assert sum(int(s.attrib.get('skipped', 0)) for s in suites) == 0, 'SQL tests must not skip'
+          PY
+      - name: Upload test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sqlserver-results
+          path: sqlserver-results.xml
+          if-no-files-found: warn
+      - name: Stop diagnostic SQL Server
+        if: always()
+        run: poetry run stop_mssql

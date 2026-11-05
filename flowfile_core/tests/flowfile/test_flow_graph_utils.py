@@ -57,6 +57,20 @@ def handle_run_info(run_info):
 
 
 # Test functions for the combine_flow_graphs functionality
+@pytest.mark.parametrize("input_handle, output_handle", [("input-1", "output-0"), ("input-0", "output-1")])
+def test_connect_rejects_handles_absent_from_effective_ports(input_handle, output_handle):
+    graph = create_graph()
+    add_manual_input(graph, [{"value": 1}], node_id=1)
+    add_node_promise_on_type(graph, "filter", 2)
+    connection = input_schema.NodeConnection.create_from_simple_input(
+        1, 2, input_type=input_handle, output_handle=output_handle,
+    )
+    with pytest.raises(HTTPException) as exc:
+        add_connection(graph, connection)
+    assert exc.value.status_code == 422
+    assert not graph.get_node(2).all_inputs
+
+
 def test_validate_unique_flow_ids():
     """Test that _validate_unique_flow_ids works correctly."""
     graphs = tuple(create_graph(flow_id=i) for i in range(3))

@@ -44,6 +44,7 @@ import { DEFAULT_OUTPUT_HANDLE, outputHandle } from "../utils/outputHandle";
 import { deriveHandles } from "../utils/nodeHandles";
 import {
   findAutoConnectMatch,
+  freeInputHandles,
   preferUnusedOutputs,
   type AutoConnectDrop,
   type AutoConnectMatch,
@@ -517,9 +518,7 @@ export default function useDragAndDrop() {
         {
           id: node.id,
           ...rect,
-          freeInputs: (data.inputs ?? [])
-            .filter((h) => h.position === Position.Left && (multi || !occupied.has(h.id)))
-            .map((h) => h.id),
+          freeInputs: freeInputHandles(data.inputs ?? [], occupied, multi),
           outputs: preferUnusedOutputs(
             (data.outputs ?? []).map((h) => h.id),
             used,
