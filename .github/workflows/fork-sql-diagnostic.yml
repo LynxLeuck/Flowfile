@@ -1,73 +1,115 @@
-name: Fork 718 zero-volume diagnostic
-
+name: Fork 718 upstream-mirrored final checks
 permissions:
   contents: read
-
-on:
+'on':
   push:
-    branches: [diagnostic/718-sqlserver-check]
-
+    branches:
+    - diagnostic/718-sqlserver-check
 jobs:
-  zero-volume-compose:
-    name: Zero-volume compose
+  test-web:
     runs-on: ubuntu-latest
-    timeout-minutes: 75
-
-    env:
-      COMPOSE_PROJECT_NAME: flowfile-remote-worker-${{ github.run_id }}
-
+    defaults:
+      run:
+        working-directory: flowfile_frontend
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    - uses: actions/checkout@v4
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+        cache: npm
+        cache-dependency-path: flowfile_frontend/package-lock.json
+    - name: Install Node Dependencies
+      run: npm ci
+    - name: Run frontend unit tests (vitest)
+      run: npm run test:unit
+    - name: Build Web Version
+      run: npm run build:web
+    - name: Run Vite Preview and Check Port Availability
+      run: "# Start the preview server in the background\nnpm run preview:web &\n# Wait for the server to fully\
+        \ start\nsleep 10\n# Verify that the server responds with a 200 OK on port 4173\nif ! curl -sI http://localhost:4173\
+        \ | grep -q \"200 OK\"; then\n  echo \"Port 4173 is not available or did not return 200 OK\"\n  exit 1\n\
+        fi\n"
+    - name: Reject build-time tracked-source rewrites
+      working-directory: ${{ github.workspace }}
+      run: git diff --exit-code && git diff --check 56e236104adf80d6a71cbb36be908ab58d265784 HEAD
+    timeout-minutes: 25
+  linux-native:
+    name: Upstream Linux release recipe, unsigned diagnostic only
+    runs-on: ubuntu-22.04
+    timeout-minutes: 65
+    strategy:
+      matrix:
+        include:
+        - platform: ubuntu-22.04
+          target: x86_64-unknown-linux-gnu
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ matrix.target }}
+    - name: Cache cargo registry & target
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: flowfile_frontend/src-tauri
+    - name: Install Linux WebKit dependencies
+      if: matrix.platform == 'ubuntu-22.04'
+      run: "sudo apt-get update\nsudo apt-get install -y \\\n  libwebkit2gtk-4.1-dev \\\n  build-essential \\\n\
+        \  curl \\\n  wget \\\n  file \\\n  libssl-dev \\\n  libayatana-appindicator3-dev \\\n  librsvg2-dev \\\n\
+        \  patchelf\n\nsudo apt-get install -y xvfb xauth dbus-x11\n"
+    - name: Install Poetry
+      run: pip install poetry
+    - name: Install Python deps
+      run: poetry install --with build,runtime64 --no-interaction --no-ansi
+    - name: Scoped Ruff and contribution whitespace checks
+      run: 'poetry run ruff check flowfile_core/flowfile_core/ai/safety.py flowfile_core/flowfile_core/ai/tools/executor/handlers/connections.py
+        flowfile_core/flowfile_core/flowfile/flow_graph/connections.py flowfile_core/flowfile_core/schemas/schemas.py
+        flowfile_core/tests/ai/test_executor.py flowfile_core/tests/flowfile/test_flow_graph_utils.py flowfile_core/tests/test_node_ports.py
+        flowfile_core/tests/test_node_ports_api.py
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+        git diff --check 56e236104adf80d6a71cbb36be908ab58d265784 HEAD'
+    - name: Build Python services (PyInstaller)
+      run: poetry run build_backends
+    - name: Verify the kernel image manifest is in the bundle
+      shell: bash
+      run: test -f services_dist/_internal/flowfile_core/kernel/kernel_image_manifest.json
+    - name: Stage sidecars for Tauri
+      run: poetry run python tools/rename_sidecar.py --triple ${{ matrix.target }}
+    - name: Install frontend deps
+      working-directory: flowfile_frontend
+      run: npm ci
+    - name: Build Tauri app
+      working-directory: flowfile_frontend
+      run: npx tauri build --target ${{ matrix.target }} --bundles deb --no-sign --config '{"bundle":{"createUpdaterArtifacts":false}}'
+        -- --locked
+    - name: Smoke test the packaged app (diagnostic extension, not upstream coverage)
+      run: 'python - <<''PY''
 
-      - name: Install Poetry
-        run: |
-          curl -sSL https://install.python-poetry.org | python -
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
+        import pathlib, subprocess, os
 
-      - name: Cache Poetry dependencies
-        uses: actions/cache@v4
-        with:
-          path: .venv
-          key: poetry-${{ runner.os }}-${{ hashFiles('poetry.lock') }}
-          restore-keys: |
-            poetry-${{ runner.os }}-
+        packages=list(pathlib.Path(''flowfile_frontend/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb'').glob(''*.deb''))
 
-      - name: Install dependencies
-        run: |
-          poetry config virtualenvs.create true
-          poetry config virtualenvs.in-project true
-          poetry install --no-interaction --no-ansi
+        assert len(packages)==1,packages
 
-      # The fixture's image build alone may take 25 minutes.
-      - name: Run the zero-volume compose test
-        run: poetry run pytest tests/remote_worker/test_zero_volumes.py -vv --tb=short --junitxml=zero-volume-results.xml
-        timeout-minutes: 45
+        subprocess.run([''python'',''.github/diagnostics/native-startup.py'',''--package'',str(packages[0]),''--results'',os.environ[''RUNNER_TEMP'']+''/native-smoke''],check=True)
 
-      - name: Verify all seven tests actually passed
-        run: |
-          python - <<'PY'
-          import json, xml.etree.ElementTree as ET
-          from pathlib import Path
-          suites = list(ET.parse('zero-volume-results.xml').getroot().iter('testsuite'))
-          counts = {k: sum(int(s.get(k, 0)) for s in suites) for k in ['tests', 'failures', 'errors', 'skipped']}
-          assert counts == {'tests': 7, 'failures': 0, 'errors': 0, 'skipped': 0}, counts
-          Path('zero-volume-summary.json').write_text(json.dumps(counts, indent=2))
-          print(counts)
-          PY
-
-      - name: Upload compact test evidence
-        uses: actions/upload-artifact@v4
-        with:
-          name: zero-volume-results
-          path: zero-volume-summary.json
-          if-no-files-found: error
-
-      - name: Remove the compose project
-        if: always()
-        run: docker compose -f docker-compose.remote-worker.yml -p "$COMPOSE_PROJECT_NAME" down -v --remove-orphans || true
+        PY'
+    - name: Reject tracked-source changes
+      run: git diff --exit-code
+    - name: Upload compact startup evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: native-startup-evidence
+        path: ${{ runner.temp }}/native-smoke/result.json
+        if-no-files-found: warn
