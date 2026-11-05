@@ -1,0 +1,49 @@
+name: Issue 878 repeated Explore diagnostic
+on:
+  push:
+    branches: [diagnostic/878-repeated-explore]
+permissions:
+  contents: read
+jobs:
+  reproduce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python -
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+      - uses: actions/cache@v4
+        with:
+          path: .venv
+          key: poetry-${{ runner.os }}-${{ hashFiles('poetry.lock') }}
+          restore-keys: |
+            poetry-${{ runner.os }}-
+      - name: Install upstream locked dependencies
+        run: |
+          poetry config virtualenvs.create true
+          poetry config virtualenvs.in-project true
+          poetry install --no-interaction --no-ansi
+      - name: Record source and environment
+        run: |
+          mkdir -p issue878-evidence
+          git rev-parse HEAD | tee issue878-evidence/source.txt
+          poetry run python --version | tee issue878-evidence/python.txt
+          poetry show > issue878-evidence/dependencies.txt
+      - name: Repeated 12-node runs with shared and separate storage
+        env:
+          ISSUE878_EVIDENCE: ${{ github.workspace }}/issue878-evidence
+        run: poetry run pytest tests/remote_worker/test_issue878_diagnostic.py -vv -s --tb=long --junitxml=issue878-evidence/junit.xml
+        timeout-minutes: 18
+      - name: Retain diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue878-evidence
+          path: issue878-evidence
+          retention-days: 14
+          if-no-files-found: warn
