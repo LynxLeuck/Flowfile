@@ -1,86 +1,73 @@
-name: Fork SQL Server diagnostic
+name: Fork 718 zero-volume diagnostic
+
+permissions:
+  contents: read
+
 on:
   push:
     branches: [diagnostic/718-sqlserver-check]
-permissions:
-  contents: read
+
 jobs:
-  sqlserver:
+  zero-volume-compose:
+    name: Zero-volume compose
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 75
+
+    env:
+      COMPOSE_PROJECT_NAME: flowfile-remote-worker-${{ github.run_id }}
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install existing project dependencies
+
+      - name: Install Poetry
         run: |
-          pip install poetry
-          poetry install --no-interaction --no-ansi --with dev
-      - name: Start project SQL Server and verify readiness
+          curl -sSL https://install.python-poetry.org | python -
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Cache Poetry dependencies
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: poetry-${{ runner.os }}-${{ hashFiles('poetry.lock') }}
+          restore-keys: |
+            poetry-${{ runner.os }}-
+
+      - name: Install dependencies
         run: |
-          uname -m
-          docker info --format '{{.Architecture}}'
-          poetry run python -c 'from test_utils.mssql.fixtures import start_mssql_container; assert start_mssql_container()[1], "SQL Server startup failed"'
-          poetry run python -c 'from test_utils.mssql.fixtures import can_connect_to_db; assert can_connect_to_db(), "SQL Server is not ready"'
-      - name: Run existing SQL Server tests
+          poetry config virtualenvs.create true
+          poetry config virtualenvs.in-project true
+          poetry install --no-interaction --no-ansi
+
+      # The fixture's image build alone may take 25 minutes.
+      - name: Run the zero-volume compose test
+        run: poetry run pytest tests/remote_worker/test_zero_volumes.py -vv --tb=short --junitxml=zero-volume-results.xml
+        timeout-minutes: 45
+
+      - name: Verify all seven tests actually passed
         run: |
-          poetry run pytest flowfile_core/tests/flowfile/external_sources/test_mssql_source.py --confcutdir=flowfile_core/tests/flowfile/external_sources -ra --junitxml=sqlserver-results.xml
-          poetry run python - <<'PY'
-          import xml.etree.ElementTree as ET
-          suites = ET.parse('sqlserver-results.xml').getroot().iter('testsuite')
-          suites = list(suites)
-          assert sum(int(s.attrib.get('tests', 0)) for s in suites) > 0
-          assert sum(int(s.attrib.get('skipped', 0)) for s in suites) == 0, 'SQL tests must not skip'
-          PY
-      # The fixture uses --rm: collect before stop removes the container.
-      - name: Capture SQL Server failure logs
-        if: failure()
-        run: |
-          poetry run python - <<'PY'
-          import re
-          import subprocess
+          python - <<'PY'
+          import json, xml.etree.ElementTree as ET
           from pathlib import Path
-          from urllib.parse import quote, quote_plus
-          from test_utils.mssql.fixtures import MSSQL_CONTAINER_NAME, MSSQL_PASSWORD, MSSQL_SA_PASSWORD, MSSQL_USER
-
-          def sanitize(text):
-              # Never retain connection URIs or credential configuration lines.
-              lines = [line for line in text.splitlines()
-                       if not re.search(r'://|password|pwd\s*=|connection\s*string|TEST_MSSQL_|MSSQL_SA_', line, re.I)]
-              text = '\n'.join(lines)
-              values = {variant for value in (MSSQL_PASSWORD, MSSQL_SA_PASSWORD, MSSQL_USER)
-                        if value for variant in (value, quote(value, safe=''), quote_plus(value, safe=''))}
-              for value in sorted(values, key=len, reverse=True):
-                  text = text.replace(value, '[REDACTED]')
-              return text
-
-          try:
-              result = subprocess.run(["docker", "logs", MSSQL_CONTAINER_NAME], capture_output=True,
-                                      text=True, errors='replace', timeout=30, check=False)
-              # Docker errors may contain configuration; never retain stderr on failure.
-              text = sanitize(result.stdout + '\n' + result.stderr) if result.returncode == 0 else 'SQL Server container logs unavailable.'
-          except (OSError, subprocess.SubprocessError):
-              text = 'SQL Server container log capture unavailable.'
-          Path('sqlserver-container.log').write_text(text + '\n')
+          suites = list(ET.parse('zero-volume-results.xml').getroot().iter('testsuite'))
+          counts = {k: sum(int(s.get(k, 0)) for s in suites) for k in ['tests', 'failures', 'errors', 'skipped']}
+          assert counts == {'tests': 7, 'failures': 0, 'errors': 0, 'skipped': 0}, counts
+          Path('zero-volume-summary.json').write_text(json.dumps(counts, indent=2))
+          print(counts)
           PY
-      - name: Upload test evidence
-        if: always()
+
+      - name: Upload compact test evidence
         uses: actions/upload-artifact@v4
         with:
-          name: sqlserver-results
-          path: |
-            sqlserver-results.xml
-            sqlserver-container.log
-          if-no-files-found: warn
-      - name: Stop diagnostic SQL Server
+          name: zero-volume-results
+          path: zero-volume-summary.json
+          if-no-files-found: error
+
+      - name: Remove the compose project
         if: always()
-        run: |
-          poetry run python - <<'PY'
-          import subprocess
-          from test_utils.mssql.fixtures import MSSQL_CONTAINER_NAME, stop_mssql_container
-          assert stop_mssql_container(), "SQL Server cleanup failed"
-          remaining = subprocess.check_output(["docker", "ps", "-aq", "--filter", f"name=^{MSSQL_CONTAINER_NAME}$"], text=True).strip()
-          assert not remaining, "Diagnostic container was not removed"
-          print("Verified diagnostic SQL Server container removed")
-          PY
+        run: docker compose -f docker-compose.remote-worker.yml -p "$COMPOSE_PROJECT_NAME" down -v --remove-orphans || true
