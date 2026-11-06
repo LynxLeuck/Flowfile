@@ -287,6 +287,18 @@ class SchemaReference:
         """Return tables registered in this schema."""
         return _metadata.tables(self.id)
 
+    def get_table_ref(self, name: str) -> TableReference:
+        """Return a metadata snapshot for a table, without creating it.
+
+        A missing table has ``id=None``; use ``exists()`` to check or ``write()``
+        to build a flow that creates it. Metadata follows the same local/notebook
+        lookup path as :meth:`list_tables`.
+        """
+        for table in self.list_tables():
+            if table.name == name:
+                return TableReference(name=name, schema=self, metadata=table)
+        return TableReference(name=name, schema=self)
+
     def get_flow(self, name: str) -> FlowRef:
         """Return the flow registered under ``name`` in this schema.
 
@@ -427,6 +439,66 @@ class SchemaReference:
             track_changes=track_changes,
             description=description,
         )
+
+
+class TableReference:
+    """Snapshot of an existing or potential table in a schema.
+
+    Metadata is refreshed explicitly. Reads and writes use the existing
+    FlowFrame API rather than the kernel's Polars API.
+    """
+
+    name: str
+    schema: SchemaReference
+    id: int | None
+    file_path: str | None
+    row_count: int | None
+    column_count: int | None
+    size_bytes: int | None
+    schema_columns: list[dict[str, str]]
+    table_type: str
+
+    def __init__(self, name: str, schema: SchemaReference, *, metadata: CatalogTableOut | None = None) -> None:
+        self.name = name
+        self.schema = schema
+        self.id = metadata.id if metadata is not None else None
+        self.file_path = metadata.file_path if metadata is not None else None
+        self.row_count = metadata.row_count if metadata is not None else None
+        self.column_count = metadata.column_count if metadata is not None else None
+        self.size_bytes = metadata.size_bytes if metadata is not None else None
+        self.schema_columns = (
+            [column.model_dump() for column in metadata.schema_columns] if metadata is not None else []
+        )
+        self.table_type = metadata.table_type if metadata is not None else "physical"
+
+    def exists(self) -> bool:
+        """Whether the table existed when this metadata snapshot was fetched."""
+        return self.id is not None
+
+    def read(self, *, delta_version: int | None = None) -> FlowFrame:
+        """Build a FlowFrame reading this table, optionally at a Delta version."""
+        return self.schema.read_table(self.name, delta_version=delta_version)
+
+    def write(
+        self,
+        df: FlowFrame,
+        *,
+        write_mode: WriteMode = "overwrite",
+        merge_keys: list[str] | None = None,
+        description: str | None = None,
+    ) -> FlowFrame:
+        """Build a write flow; collect the returned frame to write the table.
+
+        This snapshot is unchanged. Call ``refresh()`` after execution to obtain
+        the updated metadata, including the id of a newly created table.
+        """
+        return self.schema.write_table(
+            df, self.name, write_mode=write_mode, merge_keys=merge_keys, description=description
+        )
+
+    def refresh(self) -> TableReference:
+        """Return a new snapshot, with ``id=None`` if the table no longer exists."""
+        return self.schema.get_table_ref(self.name)
 
 
 def get_catalog(name: str) -> CatalogReference:

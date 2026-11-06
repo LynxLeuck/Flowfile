@@ -57,6 +57,7 @@ from flowfile_frame.catalog import (  # noqa: F401
 from flowfile_frame.catalog_reference import (  # noqa: F401
     CatalogReference,
     SchemaReference,
+    TableReference,
     default_schema,
     get_catalog,
     list_catalogs,

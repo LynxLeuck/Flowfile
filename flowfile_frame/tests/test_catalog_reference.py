@@ -343,6 +343,20 @@ def _reader_ids(frame) -> tuple[int | None, int | None]:
     return settings.catalog_table_id, settings.catalog_namespace_id
 
 
+class TestTableReferenceIO:
+    def test_write_read_and_refresh(self, table_schema):
+        ref = table_schema.get_table_ref("sales-data")
+        assert not ref.exists()
+        data = {"amount": [1, 2, 3]}
+        written = ref.write(from_dict(data))
+        assert written.collect().equals(pl.DataFrame(data))
+        updated = ref.refresh()
+        assert updated.exists()
+        assert updated.schema == table_schema
+        assert updated.read().collect().equals(pl.DataFrame(data))
+        assert not ref.exists()  # Refresh returns a new snapshot.
+
+
 class TestSchemaReadCatalogTable:
     def test_reads_the_same_table_as_read_table(self, table_schema):
         table_schema.write_table(from_dict({"currency": ["EUR", "USD"], "amount": [1.5, 2.0]}), "fx_rates")
