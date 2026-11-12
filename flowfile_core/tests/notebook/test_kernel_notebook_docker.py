@@ -159,6 +159,36 @@ def _table_rows(result: dict) -> list:
     return tables[0]["data"]
 
 
+@pytest.mark.parametrize("namespace_id", [-123, -1_500_000_123])
+def test_catalog_page_cells_read_core_metadata_without_a_local_database(notebook_kernel, client_as, namespace_id):
+    """Saved and unsaved Catalog notebooks use ordinary cells, not a canvas session."""
+    from flowfile_core.notebook import kernel_runner
+
+    client = client_as(NOTEBOOK_OWNER_ID, client=LOOPBACK)
+    key = {"flow_id": namespace_id, "node_id": 1}
+    code = (
+        "import flowfile as ff\n"
+        "print('catalogs', sorted(c.name for c in ff.list_catalogs()))\n"
+        "print('schema', ff.get_catalog('General').get_schema('default').name)\n"
+    )
+    result = client.post(f"/kernels/{KERNEL_ID}/execute_cell", json={**key, "code": code})
+    assert result.status_code == 200, result.text
+    assert result.json()["success"], result.json()
+    assert "General" in result.json()["stdout"] and "schema default" in result.json()["stdout"]
+    assert not kernel_runner._catalog_executions
+    database = f"{_kernel_storage()}/database/flowfile_catalog.db"
+    assert not _in_kernel(database)
+
+    failed = client.post(
+        f"/kernels/{KERNEL_ID}/execute_cell", json={**key, "code": "raise ValueError('cell failed')"}
+    )
+    assert failed.status_code == 200 and not failed.json()["success"], failed.text
+    assert not kernel_runner._catalog_executions
+    repeated = client.post(f"/kernels/{KERNEL_ID}/execute_cell", json={**key, "code": code})
+    assert repeated.status_code == 200 and repeated.json()["success"], repeated.text
+    assert not _in_kernel(database)
+
+
 def test_a_notebook_session_on_a_real_kernel(smoke_flow, notebook_kernel, client_as):
     client = client_as(NOTEBOOK_OWNER_ID, client=LOOPBACK)
     key = {"flow_id": smoke_flow.flow_id, "kernel_id": KERNEL_ID}

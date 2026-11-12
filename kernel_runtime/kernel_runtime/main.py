@@ -548,6 +548,7 @@ def _run_user_code(
             source_registration_id=request.source_registration_id,
             log_callback_url=request.log_callback_url,
             internal_token=request.internal_token,
+            exec_token=request.exec_token,
             interactive=request.interactive,
             available_artifacts=request.available_artifacts,
             dry_run=request.dry_run,
@@ -581,7 +582,15 @@ def _run_user_code(
                 user_code = _maybe_wrap_last_expression(user_code)
 
             try:
-                exec(user_code, exec_globals)  # noqa: S102
+                if request.flow_id < 0:
+                    from flowfile_frame import _metadata, notebook_kernel
+
+                    notebook_kernel._refuse_database()
+                    metadata_context = _metadata.installed(request.flow_id, notebook_kernel.lookup_transport)
+                else:
+                    metadata_context = contextlib.nullcontext()
+                with metadata_context:
+                    exec(user_code, exec_globals)  # noqa: S102
             finally:
                 _capture_open_figures()
 
