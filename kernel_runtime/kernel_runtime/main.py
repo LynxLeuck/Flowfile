@@ -586,7 +586,10 @@ def _run_user_code(
                     from flowfile_frame import _metadata, notebook_kernel
 
                     notebook_kernel._refuse_database()
-                    metadata_context = _metadata.installed(request.flow_id, notebook_kernel.lookup_transport)
+                    lookup = functools.partial(
+                        notebook_kernel.post_lookup, headers=flowfile_client._get_internal_auth_headers()
+                    )
+                    metadata_context = _metadata.installed(request.flow_id, lookup)
                 else:
                     metadata_context = contextlib.nullcontext()
                 with metadata_context:
