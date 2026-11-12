@@ -84,7 +84,11 @@ def test_catalog_page_execute_cell_routes_metadata_through_core(client, kernel_s
     namespace_id = -987654321
     response = client.post(
         f"/kernels/{kernel_sim.kernel.id}/execute_cell",
-        json={"node_id": 1, "flow_id": namespace_id, "code": "from flowfile_frame import _metadata; _metadata.namespaces(None)"},
+        json={
+            "node_id": 1,
+            "flow_id": namespace_id,
+            "code": "from flowfile_frame import _metadata; _metadata.namespaces(None)",
+        },
     )
     assert response.status_code == 200, response.text
     assert response.json()["success"], response.json()

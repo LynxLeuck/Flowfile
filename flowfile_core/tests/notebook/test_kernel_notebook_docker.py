@@ -193,7 +193,8 @@ def test_catalog_page_cells_read_core_metadata_without_a_local_database(
         "schema = ff.get_catalog('General').get_schema('default')\n"
         "print('schema', schema.name)\n"
         f"print('rows', schema.read_table({catalog_cell_table!r}).collect().to_dicts())\n"
-        f"print('sql', ff.read_catalog_sql('SELECT SUM(amount) AS total FROM {catalog_cell_table}').collect().to_dicts())\n"
+        "print('sql', ff.read_catalog_sql("
+        f"'SELECT SUM(amount) AS total FROM {catalog_cell_table}').collect().to_dicts())\n"
     )
     result = client.post(f"/kernels/{KERNEL_ID}/execute_cell", json={**key, "code": code})
     assert result.status_code == 200, result.text
