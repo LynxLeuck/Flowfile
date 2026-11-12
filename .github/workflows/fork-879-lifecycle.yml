@@ -22,7 +22,7 @@ jobs:
         env:
           FLOWFILE_WORKER_POOL_SIZE: '2'
         run: |
-          poetry run pytest flowfile_core/tests/test_run_flow_node.py flowfile_core/tests/flowfile/test_subflow_nodes.py flowfile_core/tests/test_node_ports.py flowfile_core/tests/test_node_ports_api.py -ra --disable-warnings --junitxml=lifecycle-results.xml
+          poetry run pytest flowfile_core/tests/test_run_flow_node.py flowfile_core/tests/flowfile/test_subflow_nodes.py flowfile_core/tests/test_node_ports.py flowfile_core/tests/test_node_ports_api.py flowfile_core/tests/ai/test_diff.py flowfile_core/tests/ai/test_executor.py flowfile_core/tests/flowfile/test_flow_graph_utils.py -ra --disable-warnings --junitxml=lifecycle-results.xml
           poetry run python - <<'PY'
           import xml.etree.ElementTree as ET
           root = ET.parse('lifecycle-results.xml').getroot()

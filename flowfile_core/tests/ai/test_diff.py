@@ -783,6 +783,48 @@ def test_end_to_end_stage_then_accept(authed_client: TestClient, registered_flow
     _ = connection_payload  # Keep the helper exercised for the future path.
 
 
+@pytest.mark.parametrize("output_handle", ["output-99", "output-0"])
+def test_staged_connection_accept_enforces_ports_and_occupancy(
+    authed_client: TestClient, registered_flow: FlowGraph, output_handle: str
+) -> None:
+    # Node 2 is only staged; its implicit main input will be occupied by node 1.
+    # Node 3 then proposes either an invalid output or a competing single-input wire.
+    _add_orders_input(registered_flow, node_id=3)
+    staged_filter = _stage_filter(registered_flow, node_id=2, upstream=1)
+    assert staged_filter.status == "staged"
+    connection = input_schema.NodeConnection.create_from_simple_input(
+        from_id=3, to_id=2, input_type="input-0", output_handle=output_handle
+    ).model_dump(mode="json")
+    before_ids = [node.node_id for node in registered_flow.nodes]
+    before_undo = registered_flow.get_history_state().undo_count
+    stage = authed_client.post(
+        "/ai/diff/stage",
+        json={
+            "session_id": "port-contract-regression",
+            "flow_id": registered_flow.flow_id,
+            "rationale": "verify explicit connection acceptance boundary",
+            "staged_results": [
+                {
+                    "tool_name": staged_filter.tool_name,
+                    "audit_id": staged_filter.audit_id,
+                    "staged_node_payload": staged_filter.staged_node_payload,
+                },
+                {"tool_name": "flowfile.graph.connect", "staged_node_payload": {"connection": connection}},
+            ],
+        },
+    )
+    assert stage.status_code == 200, stage.text
+    diff_id = stage.json()["diff_id"]
+    accept = authed_client.post(
+        f"/ai/diff/{diff_id}/accept", json={"flow_id": registered_flow.flow_id}
+    )
+    assert 400 <= accept.status_code < 500, accept.text
+    assert [node.node_id for node in registered_flow.nodes] == before_ids
+    assert registered_flow.get_node(2) is None
+    assert registered_flow.get_history_state().undo_count == before_undo
+    assert diff.get_diff(diff_id) is not None
+
+
 # modifications bucket
 
 

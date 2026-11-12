@@ -405,6 +405,21 @@ def test_zero_output_subflow_returns_run_summary(tmp_path):
     assert "run_index" in summary.columns
     assert summary["success"].to_list() == [True]
 
+    # A real summary result must also be advertised and connectable by the editor.
+    serialized = parent.get_node(9).get_node_input().model_dump(mode="json")
+    assert [port["id"] for port in serialized["outputs"]] == ["output-0"]
+    add_promise(parent, 10, "flow_output")
+    parent.add_flow_output(
+        input_schema.NodeFlowOutput(flow_id=parent.flow_id, node_id=10, output_name="summary", depending_on_id=9)
+    )
+    add_connection(
+        parent,
+        input_schema.NodeConnection.create_from_simple_input(9, 10),
+        validate_ports=True,
+    )
+    run_and_assert_ok(parent)
+    assert parent.get_node(10).get_resulting_data().collect()["success"].to_list() == [True]
+
 
 def test_run_summary_schema_prediction_matches_a_real_run(tmp_path):
     graph = make_graph(440, "no_output_params_subflow")
