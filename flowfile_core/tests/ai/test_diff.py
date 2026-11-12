@@ -783,7 +783,7 @@ def test_end_to_end_stage_then_accept(authed_client: TestClient, registered_flow
     _ = connection_payload  # Keep the helper exercised for the future path.
 
 
-@pytest.mark.parametrize("output_handle", ["output-99", "output-0"])
+@pytest.mark.parametrize("output_handle", ["output-1", "output-0"])
 def test_staged_connection_accept_enforces_ports_and_occupancy(
     authed_client: TestClient, registered_flow: FlowGraph, output_handle: str
 ) -> None:
