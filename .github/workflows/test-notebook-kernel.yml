@@ -35,15 +35,25 @@ jobs:
     name: Notebook Kernel Tests
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      POETRY_VIRTUALENVS_IN_PROJECT: "true"
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Python 3.11
+        id: python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
+      # Exact keys only: do not restore environments with stale dependencies.
+      - name: Cache Poetry virtualenv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: notebook-venv-v1-${{ runner.os }}-${{ runner.arch }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('poetry.lock', 'pyproject.toml') }}
 
       - name: Install Poetry
         run: |
@@ -54,8 +64,19 @@ jobs:
         run: |
           poetry install --no-interaction --no-ansi
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Load into Docker so the existing notebook build and fixtures use this image.
       - name: Build the lite kernel image
-        run: make rebuild_kernel KERNEL_FLAVOUR=lite
+        uses: docker/build-push-action@v6
+        with:
+          context: kernel_runtime/
+          load: true
+          tags: flowfile-kernel-lite:local
+          build-args: SLIM_CONSTRAINTS=true
+          cache-from: type=gha,scope=notebook-kernel-lite
+          cache-to: type=gha,scope=notebook-kernel-lite,mode=max
 
       # On the lite image just built, so an unpublished kernel change is tested too.
       - name: Build the notebook kernel image from this checkout's wheel
