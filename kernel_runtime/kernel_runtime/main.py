@@ -582,7 +582,8 @@ def _run_user_code(
                 user_code = _maybe_wrap_last_expression(user_code)
 
             try:
-                if request.flow_id < 0:
+                # Catalog cells are interactive; Designer dry runs also use negative IDs.
+                if request.interactive and request.flow_id < 0:
                     from flowfile_frame import _metadata, notebook_kernel
 
                     notebook_kernel._refuse_database()
