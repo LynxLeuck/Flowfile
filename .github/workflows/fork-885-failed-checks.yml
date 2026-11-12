@@ -1,0 +1,48 @@
+name: Issue 885 failed-check regression
+
+on:
+  push:
+    branches: [diagnostic/notebook-cache-885]
+    paths: ['.github/workflows/fork-885-failed-checks.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  failed-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python -
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+      - name: Install dependencies
+        run: poetry install --no-interaction --no-ansi --with dev
+      - name: Check stub drift
+        id: stubs
+        continue-on-error: true
+        run: make check_stubs
+      - name: Build ordinary kernel image
+        run: docker build -t flowfile-kernel -f kernel_runtime/Dockerfile kernel_runtime/
+      - name: Run the previously failing Docker dry-run test
+        id: dry-run
+        continue-on-error: true
+        run: >-
+          poetry run pytest
+          flowfile_core/tests/flowfile/node_designer/test_dry_run.py::test_dry_run_executes_on_kernel
+          -m kernel -vv -rs --disable-warnings
+          -o faulthandler_timeout=600 --timeout=900 --timeout-method=thread
+      - name: Require both checks to pass
+        if: always()
+        env:
+          STUBS: ${{ steps.stubs.outcome }}
+          DRY_RUN: ${{ steps.dry-run.outcome }}
+        run: |
+          test "$STUBS" = success
+          test "$DRY_RUN" = success
