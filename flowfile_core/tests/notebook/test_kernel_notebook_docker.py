@@ -193,12 +193,14 @@ def test_catalog_page_cells_read_core_metadata_without_a_local_database(
         "schema = ff.get_catalog('General').get_schema('default')\n"
         "print('schema', schema.name)\n"
         f"print('rows', schema.read_table({catalog_cell_table!r}).collect().to_dicts())\n"
+        f"print('sql', ff.read_catalog_sql('SELECT SUM(amount) AS total FROM {catalog_cell_table}').collect().to_dicts())\n"
     )
     result = client.post(f"/kernels/{KERNEL_ID}/execute_cell", json={**key, "code": code})
     assert result.status_code == 200, result.text
     assert result.json()["success"], result.text
     assert "General" in result.json()["stdout"] and "schema default" in result.json()["stdout"]
     assert "rows [{'id': 1, 'amount': 10}, {'id': 2, 'amount': 20}]" in result.json()["stdout"]
+    assert "sql [{'total': 30}]" in result.json()["stdout"]
     assert not kernel_runner._catalog_executions
     database = f"{_kernel_storage()}/database/flowfile_catalog.db"
     assert not _in_kernel(database)
