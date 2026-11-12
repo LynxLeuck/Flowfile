@@ -1,0 +1,193 @@
+name: Issue 885 notebook browser checks
+
+on:
+  push:
+    branches: [diagnostic/notebook-cache-885]
+    paths: ['.github/workflows/fork-885-browser.yml']
+  workflow_dispatch:
+
+# Explicit permissions for security
+permissions:
+  contents: read
+
+jobs:
+  e2e-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Setup Python for backend
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # Setup Node.js for frontend
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: flowfile_frontend/package-lock.json
+
+      # Install Poetry
+      - name: Install Poetry
+        run: |
+          pip install poetry
+          poetry config virtualenvs.create true
+          poetry config virtualenvs.in-project true
+
+      # Verify lock file is up to date
+      - name: Check poetry.lock is up to date
+        run: poetry check --lock
+
+      # Cache Poetry dependencies
+      - name: Cache Poetry dependencies
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: poetry-${{ runner.os }}-${{ hashFiles('poetry.lock') }}
+          restore-keys: |
+            poetry-${{ runner.os }}-
+
+      # Install backend dependencies
+      - name: Install backend dependencies
+        run: poetry install --no-interaction --no-ansi
+
+      # Install frontend dependencies
+      - name: Install frontend dependencies
+        working-directory: flowfile_frontend
+        run: npm ci
+
+      # Install Playwright browsers
+      - name: Install Playwright browsers
+        working-directory: flowfile_frontend
+        run: npx playwright install --with-deps chromium
+
+      # Build frontend for production
+      - name: Build frontend
+        working-directory: flowfile_frontend
+        run: npm run build:web
+
+      # cloud-storage-flow.spec.ts reads s3://flowfile-test/cloud-e2e/source.parquet.
+      - name: Start MinIO and seed the cloud E2E source
+        run: |
+          poetry run start_minio
+          poetry run seed_cloud_e2e
+
+      # MinIO-only static-key profile + endpoint: a "No connection" cloud node never reaches AWS.
+      - name: Write the MinIO AWS profile and server working directories
+        run: |
+          mkdir -p "$RUNNER_TEMP/aws" "$RUNNER_TEMP/core_cwd" "$RUNNER_TEMP/worker_cwd"
+          printf '[default]\naws_access_key_id = minioadmin\naws_secret_access_key = minioadmin\n' > "$RUNNER_TEMP/aws/credentials"
+          printf '[default]\nregion = us-east-1\n' > "$RUNNER_TEMP/aws/config"
+          {
+            echo "AWS_SHARED_CREDENTIALS_FILE=$RUNNER_TEMP/aws/credentials"
+            echo "AWS_CONFIG_FILE=$RUNNER_TEMP/aws/config"
+            echo "AWS_ENDPOINT_URL=http://localhost:9000"
+            echo "AWS_ALLOW_HTTP=true"
+            echo "AWS_EC2_METADATA_DISABLED=true"
+          } >> "$GITHUB_ENV"
+
+      # Start backend server in background; `poetry -P` keeps the empty working directory (Poetry 2's -C cds into the repo).
+      - name: Start backend server
+        working-directory: ${{ runner.temp }}/core_cwd
+        # Telemetry off: an undecided consent renders a modal over the designer.
+        env:
+          FLOWFILE_TELEMETRY: '0'
+          # An exchange store with no connection named, so each node is placed by its own setting: placement-picker.spec.ts's flow, posted onto local, is saved as auto by this serving core and runs with its picked node on the worker, so nothing crosses and no S3 call is made.
+          FLOWFILE_EXCHANGE_URI: s3://flowfile-e2e/placement-exchange
+        run: |
+          poetry -P "$GITHUB_WORKSPACE" run flowfile_core > "$RUNNER_TEMP/core.log" 2>&1 &
+          echo "Waiting for backend to start..."
+          for i in {1..30}; do
+            if curl -s http://localhost:63578/auth/token -X POST > /dev/null 2>&1; then
+              echo "Backend is ready!"
+              break
+            fi
+            echo "Attempt $i: Backend not ready yet..."
+            sleep 2
+          done
+
+      # csp.spec.ts mounts graphic-walker, which needs chart data from the worker.
+      - name: Start worker server
+        working-directory: ${{ runner.temp }}/worker_cwd
+        run: |
+          poetry -P "$GITHUB_WORKSPACE" run flowfile_worker > "$RUNNER_TEMP/worker.log" 2>&1 &
+          echo "Waiting for worker to start..."
+          for i in {1..30}; do
+            if curl -s http://localhost:63579/docs > /dev/null 2>&1; then
+              echo "Worker is ready!"
+              break
+            fi
+            echo "Attempt $i: Worker not ready yet..."
+            sleep 2
+          done
+
+      # Start frontend preview server in background
+      - name: Start frontend preview server
+        working-directory: flowfile_frontend
+        run: |
+          npm run preview:web &
+          echo "Waiting for frontend to start..."
+          for i in {1..15}; do
+            if curl -s http://localhost:4173 > /dev/null 2>&1; then
+              echo "Frontend is ready!"
+              break
+            fi
+            echo "Attempt $i: Frontend not ready yet..."
+            sleep 2
+          done
+
+      # Run E2E tests
+      - name: Run E2E tests
+        working-directory: flowfile_frontend
+        env:
+          TEST_URL: http://localhost:4173
+          API_URL: http://localhost:63578
+          E2E_AWS_PROFILE_CONFIGURED: '1'
+        run: npx playwright test tests/notebook-interactions.spec.ts tests/notebook-popout.spec.ts --reporter=html
+
+      # A server that writes into its working directory resolved a path it should have refused.
+      - name: Check the servers wrote nothing into their working directories
+        if: success() || failure()
+        run: |
+          status=0
+          for dir in core_cwd worker_cwd; do
+            if [ -d "$RUNNER_TEMP/$dir" ] && [ -n "$(ls -A "$RUNNER_TEMP/$dir")" ]; then
+              echo "::error::Files were written into the server working directory $dir:"
+              ls -laR "$RUNNER_TEMP/$dir"
+              status=1
+            fi
+          done
+          exit $status
+
+      # Upload test results on failure
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: flowfile_frontend/playwright-report/
+          retention-days: 7
+
+      - name: Upload server logs
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: server-logs
+          path: |
+            ${{ runner.temp }}/core.log
+            ${{ runner.temp }}/worker.log
+          retention-days: 7
+
+      # Upload test results always (for debugging)
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: flowfile_frontend/test-results/
+          retention-days: 7
