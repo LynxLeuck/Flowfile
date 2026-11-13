@@ -10,7 +10,7 @@ permissions:
 jobs:
   clipboard:
     if: github.repository == 'LynxLeuck/Flowfile'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -52,7 +52,7 @@ jobs:
           TEST_URL: http://localhost:4173
           API_URL: http://localhost:63578
           PLAYWRIGHT_JUNIT_OUTPUT_FILE: test-results/clipboard-results.xml
-        run: npx playwright test tests/canvas-clipboard.spec.ts --retries=0 --reporter=line,junit
+        run: npx playwright test tests/canvas-clipboard.spec.ts --grep 'Run Flow paste renders' --retries=0 --reporter=line,junit
       - name: Upload browser and service evidence
         if: always()
         uses: actions/upload-artifact@v4

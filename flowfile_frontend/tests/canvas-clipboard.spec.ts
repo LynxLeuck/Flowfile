@@ -174,9 +174,13 @@ test.describe("Canvas clipboard routing", () => {
     expect(await page.evaluate(() => localStorage.getItem("flowfileNodeClipboard"))).toBe(
       JSON.stringify(copiedBuffer),
     );
-    const copyResponse = page.waitForResponse((response) =>
-      response.url().includes("/editor/copy_node/") && response.request().method() === "POST",
-    );
+    const copyResponse = page.waitForResponse((response) => {
+      if (!/\/editor\/copy_node\/?$/.test(new URL(response.url()).pathname) ||
+          response.request().method() !== "POST") return false;
+      const payload = response.request().postDataJSON();
+      return payload.flow_id === flowId &&
+        new URL(response.url()).searchParams.get("node_id_to_copy_from") === "1";
+    });
     await dispatchClipboardEvent(
       page,
       ".vue-flow__pane",
@@ -194,10 +198,23 @@ test.describe("Canvas clipboard routing", () => {
     expect(graph.ok(), await graph.text()).toBe(true);
     const copiedNode = (await graph.json()).node_inputs.find((node: { id: number }) => node.id === copiedId);
     expect(copiedNode).toBeDefined();
-    expect(copiedNode.outputs.map((port: { id: string }) => port.id)).toEqual(["output-0", "output-1"]);
+    expect(copiedNode.outputs).toEqual([
+      { id: "output-0", name: "Result" },
+      { id: "output-1", name: "Rejected" },
+    ]);
+    expect(copiedNode.inputs).toEqual([
+      { id: "input-0", name: "", kind: "parameter", hidden: true, required: false, multiple: false },
+      { id: "input-1", name: "Orders", kind: "data", hidden: false, required: false, multiple: false },
+      { id: "input-2", name: "Customers", kind: "data", hidden: false, required: false, multiple: false },
+    ]);
     const pasted = page.locator(`.vue-flow__node[data-id="${copiedId}"]`);
     await expect(pasted.locator('.handle-input .vue-flow__handle')).toHaveCount(2);
     await expect(pasted.locator('.handle-output .vue-flow__handle')).toHaveCount(2);
+    await expect(pasted.locator('.vue-flow__handle[data-handleid="input-0"]')).toHaveCount(0);
+    await expect(pasted.locator('.handle-input .vue-flow__handle').nth(0)).toHaveAttribute("data-handleid", "input-1");
+    await expect(pasted.locator('.handle-input .vue-flow__handle').nth(1)).toHaveAttribute("data-handleid", "input-2");
+    await expect(pasted.locator('.handle-output .vue-flow__handle').nth(0)).toHaveAttribute("data-handleid", "output-0");
+    await expect(pasted.locator('.handle-output .vue-flow__handle').nth(1)).toHaveAttribute("data-handleid", "output-1");
     await expect(pasted.locator('.handle-input .vue-flow__handle').nth(0)).toHaveAttribute("title", "Orders");
     await expect(pasted.locator('.handle-input .vue-flow__handle').nth(1)).toHaveAttribute("title", "Customers");
     await expect(pasted.locator('.handle-output .vue-flow__handle').nth(0)).toHaveAttribute("title", "Result");
