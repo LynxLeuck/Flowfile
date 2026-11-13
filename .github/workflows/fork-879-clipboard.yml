@@ -1,0 +1,66 @@
+name: Fork 879 clipboard regression
+on:
+  push:
+    branches: [diagnostic/879-subflow-lifecycle]
+    paths:
+      - 'flowfile_frontend/tests/canvas-clipboard.spec.ts'
+      - '.github/workflows/fork-879-clipboard.yml'
+permissions:
+  contents: read
+jobs:
+  clipboard:
+    if: github.repository == 'LynxLeuck/Flowfile'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: flowfile_frontend/package-lock.json
+      - name: Install dependencies
+        run: |
+          pip install poetry
+          poetry install --no-interaction --no-ansi
+          cd flowfile_frontend
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run build:web
+      - name: Start real services and web preview
+        env:
+          FLOWFILE_TELEMETRY: '0'
+          FLOWFILE_WORKER_POOL_SIZE: '2'
+        run: |
+          mkdir -p "$RUNNER_TEMP/core_cwd" "$RUNNER_TEMP/worker_cwd"
+          (cd "$RUNNER_TEMP/core_cwd" && poetry -P "$GITHUB_WORKSPACE" run flowfile_core > "$RUNNER_TEMP/core.log" 2>&1) &
+          (cd "$RUNNER_TEMP/worker_cwd" && poetry -P "$GITHUB_WORKSPACE" run flowfile_worker > "$RUNNER_TEMP/worker.log" 2>&1) &
+          (cd flowfile_frontend && npm run preview:web > "$RUNNER_TEMP/preview.log" 2>&1) &
+          for i in {1..60}; do
+            if curl -fsS -X POST http://localhost:63578/auth/token >/dev/null && curl -fsS http://localhost:63579/docs >/dev/null && curl -fsS http://localhost:4173 >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
+      - name: Run real browser clipboard regressions without retries
+        working-directory: flowfile_frontend
+        env:
+          TEST_URL: http://localhost:4173
+          API_URL: http://localhost:63578
+          PLAYWRIGHT_JUNIT_OUTPUT_FILE: test-results/clipboard-results.xml
+        run: npx playwright test tests/canvas-clipboard.spec.ts --retries=0 --reporter=line,junit
+      - name: Upload browser and service evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clipboard-evidence
+          path: |
+            flowfile_frontend/test-results/
+            ${{ runner.temp }}/core.log
+            ${{ runner.temp }}/worker.log
+            ${{ runner.temp }}/preview.log
+          if-no-files-found: warn
