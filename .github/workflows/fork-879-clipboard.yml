@@ -13,8 +13,15 @@ permissions:
 jobs:
   clipboard:
     if: github.repository == 'LynxLeuck/Flowfile'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -64,12 +71,16 @@ jobs:
           API_URL: http://localhost:63578
         run: |
           set -o pipefail
-          xvfb-run -a node tests/native-clipboard.cjs | tee "$RUNNER_TEMP/native-clipboard.log"
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a node tests/native-clipboard.cjs | tee "$RUNNER_TEMP/native-clipboard.log"
+          else
+            node tests/native-clipboard.cjs | tee "$RUNNER_TEMP/native-clipboard.log"
+          fi
       - name: Upload browser and service evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: clipboard-evidence
+          name: clipboard-evidence-${{ matrix.os }}
           path: |
             flowfile_frontend/test-results/
             ${{ runner.temp }}/core.log
