@@ -475,7 +475,7 @@ test.describe("Canvas clipboard routing", () => {
         const switched = page.waitForResponse((response) =>
           response.url().includes(`/flow_data/v2?flow_id=${undo ? sourceFlowId : destinationFlowId}`));
         if (undo) {
-          await page.keyboard.press("Control+z");
+          await page.keyboard.press("ControlOrMeta+z");
         } else {
           await page.evaluate(async (id) => {
             const modulePath = "/app/stores/flow-store.ts";
