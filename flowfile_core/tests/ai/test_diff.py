@@ -838,9 +838,7 @@ def test_staged_connection_accept_enforces_ports_and_occupancy(
     )
     assert stage.status_code == 200, stage.text
     diff_id = stage.json()["diff_id"]
-    accept = authed_client.post(
-        f"/ai/diff/{diff_id}/accept", json={"flow_id": registered_flow.flow_id}
-    )
+    accept = authed_client.post(f"/ai/diff/{diff_id}/accept", json={"flow_id": registered_flow.flow_id})
     if expected_error is None:
         assert accept.status_code == 200, accept.text
         assert accept.json()["applied_connection_count"] == 1

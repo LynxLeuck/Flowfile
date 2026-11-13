@@ -626,9 +626,13 @@ def apply_diff(flow, diff: GraphDiff) -> ApplyResult:
         for c in diff.connections_added:
             connection = input_schema.NodeConnection.model_validate(c.connection)
             to_node = flow.get_node(connection.input_connection.node_id)
-            already_present = to_node is not None and to_node.input_edge_handle(
-                connection.output_connection.node_id, connection.input_connection.connection_class
-            ) == connection.output_connection.connection_class
+            already_present = (
+                to_node is not None
+                and to_node.input_edge_handle(
+                    connection.output_connection.node_id, connection.input_connection.connection_class
+                )
+                == connection.output_connection.connection_class
+            )
             add_connection(flow, connection, validate_ports=True)
             if not already_present:
                 applied_connection_count += 1

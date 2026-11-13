@@ -4,7 +4,9 @@ on:
     branches: [diagnostic/879-subflow-lifecycle]
     paths:
       - 'flowfile_frontend/tests/canvas-clipboard.spec.ts'
+      - 'flowfile_frontend/tests/native-clipboard.cjs'
       - 'flowfile_frontend/src/renderer/app/composables/useDragAndDrop.ts'
+      - 'flowfile_frontend/src/renderer/app/components/nodes/node-types/elements/runFlow/RunFlow.vue'
       - '.github/workflows/fork-879-clipboard.yml'
 permissions:
   contents: read
@@ -31,7 +33,7 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
           npm run build:web
-      - name: Start real services and web preview
+      - name: Start real services and Vite development server
         env:
           FLOWFILE_TELEMETRY: '0'
           FLOWFILE_WORKER_POOL_SIZE: '2'
@@ -39,7 +41,8 @@ jobs:
           mkdir -p "$RUNNER_TEMP/core_cwd" "$RUNNER_TEMP/worker_cwd"
           (cd "$RUNNER_TEMP/core_cwd" && poetry -P "$GITHUB_WORKSPACE" run flowfile_core > "$RUNNER_TEMP/core.log" 2>&1) &
           (cd "$RUNNER_TEMP/worker_cwd" && poetry -P "$GITHUB_WORKSPACE" run flowfile_worker > "$RUNNER_TEMP/worker.log" 2>&1) &
-          (cd flowfile_frontend && npm run preview:web > "$RUNNER_TEMP/preview.log" 2>&1) &
+          # The regressions observe real stores through Vite source-module imports.
+          (cd flowfile_frontend && npm run dev:web -- --host 127.0.0.1 --port 4173 --strictPort > "$RUNNER_TEMP/preview.log" 2>&1) &
           for i in {1..60}; do
             if curl -fsS -X POST http://localhost:63578/auth/token >/dev/null && curl -fsS http://localhost:63579/docs >/dev/null && curl -fsS http://localhost:4173 >/dev/null; then
               exit 0
@@ -53,7 +56,15 @@ jobs:
           TEST_URL: http://localhost:4173
           API_URL: http://localhost:63578
           PLAYWRIGHT_JUNIT_OUTPUT_FILE: test-results/clipboard-results.xml
-        run: npx playwright test tests/canvas-clipboard.spec.ts --grep 'Run Flow paste renders' --retries=0 --reporter=line,junit
+        run: npx playwright test tests/canvas-clipboard.spec.ts --retries=0 --workers=1 --reporter=line,junit
+      - name: Verify real OS clipboard with trusted keyboard events
+        working-directory: flowfile_frontend
+        env:
+          TEST_URL: http://localhost:4173
+          API_URL: http://localhost:63578
+        run: |
+          set -o pipefail
+          xvfb-run -a node tests/native-clipboard.cjs | tee "$RUNNER_TEMP/native-clipboard.log"
       - name: Upload browser and service evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -64,4 +75,5 @@ jobs:
             ${{ runner.temp }}/core.log
             ${{ runner.temp }}/worker.log
             ${{ runner.temp }}/preview.log
+            ${{ runner.temp }}/native-clipboard.log
           if-no-files-found: warn

@@ -588,11 +588,11 @@ def test_remap_on_slot_change_drops_vanished_and_follows_renames(two_port_subflo
     assert {e.sourceHandle for e in reloaded.get_node(10).get_edge_input()} == {"output-1"}
     serialized = restored.get_node_input().model_dump(mode="json")
     assert [(p["id"], p["name"], p["hidden"]) for p in serialized["inputs"]] == [
-        ("input-0", "", True), ("input-1", "b", False), ("input-2", "c", False)
+        ("input-0", "", True),
+        ("input-1", "b", False),
+        ("input-2", "c", False),
     ]
-    assert [(p["id"], p["name"]) for p in serialized["outputs"]] == [
-        ("output-0", "out_a"), ("output-1", "out_b")
-    ]
+    assert [(p["id"], p["name"]) for p in serialized["outputs"]] == [("output-0", "out_a"), ("output-1", "out_b")]
     run_and_assert_ok(reloaded)
     assert reloaded.get_node(10).get_resulting_data().collect()["x"].to_list() == [2]
     # The replacement port is unconnected and therefore uses the child's sample data.
