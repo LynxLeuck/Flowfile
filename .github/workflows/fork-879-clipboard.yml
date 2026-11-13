@@ -4,6 +4,7 @@ on:
     branches: [diagnostic/879-subflow-lifecycle]
     paths:
       - 'flowfile_frontend/tests/canvas-clipboard.spec.ts'
+      - 'flowfile_frontend/src/renderer/app/composables/useDragAndDrop.ts'
       - '.github/workflows/fork-879-clipboard.yml'
 permissions:
   contents: read

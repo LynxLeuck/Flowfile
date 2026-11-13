@@ -671,10 +671,12 @@ export default function useDragAndDrop() {
     const copied = FlowApi.copyNode(node.nodeIdToCopyFrom, node.flowIdToCopyFrom, nodePromise);
     let newNode: Node;
     try {
-      [newNode] = await Promise.all([
-        buildCopiedNode(node, nodeId, { x: node.posX, y: node.posY }),
-        copied,
-      ]);
+      await copied;
+      // Core copies the source's current settings, not the clipboard's handle snapshot.
+      const flowData = await FlowApi.getFlowData(node.flowId);
+      const copiedNode = flowData.node_inputs.find((input) => input.id === nodeId);
+      if (!copiedNode) throw new Error(`Copied node ${nodeId} is missing from core`);
+      newNode = await getNodeToAdd(copiedNode);
     } catch (error) {
       recoverFromFailedMutation(error, "Failed to paste node");
       return false;
