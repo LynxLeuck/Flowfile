@@ -122,104 +122,139 @@ test.describe("Canvas clipboard routing", () => {
     authToken = await getAuthToken(request);
   });
 
-  test("Run Flow paste renders the current saved interface, not stale clipboard handles", async ({
-    page,
-    request,
-  }) => {
-    const created = await authPost(
-      request,
-      `${API_URL}/editor/create_flow/?name=Clipboard_RunFlow_Interface&register_in_catalog=false`,
-      authToken,
-    );
-    expect(created.ok()).toBe(true);
-    const flowId: number = await created.json();
-    const added = await authPost(
-      request,
-      `${API_URL}/editor/add_node/?flow_id=${flowId}&node_id=1&node_type=run_flow&pos_x=700&pos_y=300`,
-      authToken,
-    );
-    expect(added.ok()).toBe(true);
-    const saveInterface = async (inputSlots: string[], outputSlots: string[]) => {
-      const saved = await request.post(`${API_URL}/update_settings/?node_type=run_flow`, {
-        headers: { Authorization: `Bearer ${authToken}` },
-        data: {
-          flow_id: flowId,
-          node_id: 1,
-          flow_reference: { registration_id: 0 },
-          input_slots: inputSlots,
-          output_slots: outputSlots,
-        },
-      });
-      expect(saved.ok(), await saved.text()).toBe(true);
-    };
-    // The interface cache is saved through the real settings endpoint. Child-flow
-    // discovery/execution is outside this clipboard regression's contract.
-    await saveInterface(["Orders"], ["Result"]);
-    await openFlow(page, authToken, flowId);
-    const source = page.locator('.vue-flow__node[data-id="1"]');
-    await expect(source.locator('.handle-input .vue-flow__handle')).toHaveCount(1);
-    await expect(source.locator('.handle-output .vue-flow__handle')).toHaveCount(1);
-    await source.click();
-    await dispatchClipboardEvent(page, '.vue-flow__node[data-id="1"]', "copy", "");
-    const copiedBuffer = await page.evaluate(() =>
-      JSON.parse(localStorage.getItem("flowfileNodeClipboard")!),
-    );
-    expect(copiedBuffer.single.typeSnakeCase).toBe("run_flow");
-    expect(copiedBuffer.single.outputHandles).toHaveLength(1);
-
-    await saveInterface(["Orders", "Customers"], ["Result", "Rejected"]);
-    await page.reload();
-    await expect(source.locator('.handle-input .vue-flow__handle')).toHaveCount(2);
-    await expect(source.locator('.handle-output .vue-flow__handle')).toHaveCount(2);
-    expect(await page.evaluate(() => localStorage.getItem("flowfileNodeClipboard"))).toBe(
-      JSON.stringify(copiedBuffer),
-    );
-    const copyResponse = page.waitForResponse((response) => {
-      if (!/\/editor\/copy_node\/?$/.test(new URL(response.url()).pathname) ||
-          response.request().method() !== "POST") return false;
-      const payload = response.request().postDataJSON();
-      return payload.flow_id === flowId &&
-        new URL(response.url()).searchParams.get("node_id_to_copy_from") === "1";
-    });
-    await dispatchClipboardEvent(
+  for (const multi of [false, true]) {
+    test(`Run Flow paste renders the current saved interface, not stale clipboard handles (${multi ? "multi-node" : "single-node"})`, async ({
       page,
-      ".vue-flow__pane",
-      "paste",
-      `Flowfile nodes · 1 · ${copiedBuffer.sentinelId}`,
-    );
-    const response = await copyResponse;
-    expect(response.ok(), await response.text()).toBe(true);
-    const copiedId = (response.request().postDataJSON() as { node_id: number }).node_id;
-    expect(copiedId).not.toBe(1);
-    // Read back the exact copied instance, not the source or just a node count.
-    const graph = await request.get(`${API_URL}/flow_data/v2?flow_id=${flowId}`, {
-      headers: { Authorization: `Bearer ${authToken}` },
+      request,
+    }) => {
+      const created = await authPost(
+        request,
+        `${API_URL}/editor/create_flow/?name=Clipboard_RunFlow_Interface&register_in_catalog=false`,
+        authToken,
+      );
+      expect(created.ok()).toBe(true);
+      const flowId: number = await created.json();
+      const added = await authPost(
+        request,
+        `${API_URL}/editor/add_node/?flow_id=${flowId}&node_id=1&node_type=run_flow&pos_x=700&pos_y=300`,
+        authToken,
+      );
+      expect(added.ok()).toBe(true);
+      const saveInterface = async (inputSlots: string[], outputSlots: string[]) => {
+        const saved = await request.post(`${API_URL}/update_settings/?node_type=run_flow`, {
+          headers: { Authorization: `Bearer ${authToken}` },
+          data: {
+            flow_id: flowId,
+            node_id: 1,
+            flow_reference: { registration_id: 0 },
+            input_slots: inputSlots,
+            output_slots: outputSlots,
+          },
+        });
+        expect(saved.ok(), await saved.text()).toBe(true);
+      };
+      // The interface cache is saved through the real settings endpoint. Child-flow
+      // discovery/execution is outside this clipboard regression's contract.
+      await saveInterface(["Orders"], ["Result"]);
+      if (multi) {
+        const companion = await authPost(
+          request,
+          `${API_URL}/editor/add_node/?flow_id=${flowId}&node_id=2&node_type=manual_input&pos_x=950&pos_y=500`,
+          authToken,
+        );
+        expect(companion.ok(), await companion.text()).toBe(true);
+      }
+      await openFlow(page, authToken, flowId);
+      const source = page.locator('.vue-flow__node[data-id="1"]');
+      await expect(source.locator('.handle-input .vue-flow__handle')).toHaveCount(1);
+      await expect(source.locator('.handle-output .vue-flow__handle')).toHaveCount(1);
+      await source.click();
+      if (multi) {
+        await page.locator('.vue-flow__node[data-id="2"]').click({ modifiers: ["Alt"] });
+        await expect(page.locator('.vue-flow__node.selected')).toHaveCount(2);
+      }
+      await dispatchClipboardEvent(page, '.vue-flow__node[data-id="1"]', "copy", "");
+      const copiedBuffer = await page.evaluate(() =>
+        JSON.parse(localStorage.getItem("flowfileNodeClipboard")!),
+      );
+      if (multi) {
+        expect(copiedBuffer.single).toBeUndefined();
+        expect(copiedBuffer.multi.nodes).toHaveLength(2);
+        expect(copiedBuffer.multi.nodes.map((node: { nodeIdToCopyFrom: number }) => node.nodeIdToCopyFrom).sort()).toEqual([1, 2]);
+      }
+      const runFlowSnapshot = multi
+        ? copiedBuffer.multi.nodes.find((node: { nodeIdToCopyFrom: number }) => node.nodeIdToCopyFrom === 1)
+        : copiedBuffer.single;
+      expect(runFlowSnapshot.typeSnakeCase).toBe("run_flow");
+      expect(runFlowSnapshot.inputHandles).toHaveLength(1);
+      expect(runFlowSnapshot.outputHandles).toHaveLength(1);
+
+      await saveInterface(["Orders", "Customers"], ["Result", "Rejected"]);
+      await page.reload();
+      await expect(source.locator('.handle-input .vue-flow__handle')).toHaveCount(2);
+      await expect(source.locator('.handle-output .vue-flow__handle')).toHaveCount(2);
+      expect(await page.evaluate(() => localStorage.getItem("flowfileNodeClipboard"))).toBe(
+        JSON.stringify(copiedBuffer),
+      );
+      const copyResponse = page.waitForResponse((response) => {
+        const url = new URL(response.url());
+        if (response.request().method() !== "POST") return false;
+        const expectedPath = multi ? /\/editor\/apply_operations\/?$/ : /\/editor\/copy_node\/?$/;
+        if (!expectedPath.test(url.pathname)) return false;
+        const payload = response.request().postDataJSON();
+        return payload.flow_id === flowId && (multi
+          ? payload.operations.some((operation: { op: string; node_id_to_copy_from?: number }) =>
+              operation.op === "copy_node" && operation.node_id_to_copy_from === 1)
+          : url.searchParams.get("node_id_to_copy_from") === "1");
+      });
+      await dispatchClipboardEvent(
+        page,
+        ".vue-flow__pane",
+        "paste",
+        `Flowfile nodes · ${multi ? 2 : 1} · ${copiedBuffer.sentinelId}`,
+      );
+      const response = await copyResponse;
+      expect(response.ok(), await response.text()).toBe(true);
+      const payload = response.request().postDataJSON();
+      const copiedId: number = multi
+        ? payload.operations.find((operation: { op: string; node_id_to_copy_from?: number }) =>
+            operation.op === "copy_node" && operation.node_id_to_copy_from === 1).node_promise.node_id
+        : payload.node_id;
+      expect(copiedId).not.toBe(1);
+      if (multi) {
+        expect(payload.operations.filter((operation: { op: string }) => operation.op === "copy_node")).toHaveLength(2);
+        await expect(page.locator('.vue-flow__node')).toHaveCount(4);
+      }
+      // Read back the exact copied instance, not the source or just a node count.
+      const graph = await request.get(`${API_URL}/flow_data/v2?flow_id=${flowId}`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      expect(graph.ok(), await graph.text()).toBe(true);
+      const copiedNode = (await graph.json()).node_inputs.find((node: { id: number }) => node.id === copiedId);
+      expect(copiedNode).toBeDefined();
+      expect(copiedNode.outputs).toEqual([
+        { id: "output-0", name: "Result" },
+        { id: "output-1", name: "Rejected" },
+      ]);
+      expect(copiedNode.inputs).toEqual([
+        { id: "input-0", name: "", kind: "parameter", hidden: true, required: false, multiple: false },
+        { id: "input-1", name: "Orders", kind: "data", hidden: false, required: false, multiple: false },
+        { id: "input-2", name: "Customers", kind: "data", hidden: false, required: false, multiple: false },
+      ]);
+      const pasted = page.locator(`.vue-flow__node[data-id="${copiedId}"]`);
+      await expect(pasted.locator('.handle-input .vue-flow__handle')).toHaveCount(2);
+      await expect(pasted.locator('.handle-output .vue-flow__handle')).toHaveCount(2);
+      await expect(pasted.locator('.vue-flow__handle[data-handleid="input-0"]')).toHaveCount(0);
+      await expect(pasted.locator('.handle-input .vue-flow__handle').nth(0)).toHaveAttribute("data-handleid", "input-1");
+      await expect(pasted.locator('.handle-input .vue-flow__handle').nth(1)).toHaveAttribute("data-handleid", "input-2");
+      await expect(pasted.locator('.handle-output .vue-flow__handle').nth(0)).toHaveAttribute("data-handleid", "output-0");
+      await expect(pasted.locator('.handle-output .vue-flow__handle').nth(1)).toHaveAttribute("data-handleid", "output-1");
+      await expect(pasted.locator('.handle-input .vue-flow__handle').nth(0)).toHaveAttribute("title", "Orders");
+      await expect(pasted.locator('.handle-input .vue-flow__handle').nth(1)).toHaveAttribute("title", "Customers");
+      await expect(pasted.locator('.handle-output .vue-flow__handle').nth(0)).toHaveAttribute("title", "Result");
+      await expect(pasted.locator('.handle-output .vue-flow__handle').nth(1)).toHaveAttribute("title", "Rejected");
     });
-    expect(graph.ok(), await graph.text()).toBe(true);
-    const copiedNode = (await graph.json()).node_inputs.find((node: { id: number }) => node.id === copiedId);
-    expect(copiedNode).toBeDefined();
-    expect(copiedNode.outputs).toEqual([
-      { id: "output-0", name: "Result" },
-      { id: "output-1", name: "Rejected" },
-    ]);
-    expect(copiedNode.inputs).toEqual([
-      { id: "input-0", name: "", kind: "parameter", hidden: true, required: false, multiple: false },
-      { id: "input-1", name: "Orders", kind: "data", hidden: false, required: false, multiple: false },
-      { id: "input-2", name: "Customers", kind: "data", hidden: false, required: false, multiple: false },
-    ]);
-    const pasted = page.locator(`.vue-flow__node[data-id="${copiedId}"]`);
-    await expect(pasted.locator('.handle-input .vue-flow__handle')).toHaveCount(2);
-    await expect(pasted.locator('.handle-output .vue-flow__handle')).toHaveCount(2);
-    await expect(pasted.locator('.vue-flow__handle[data-handleid="input-0"]')).toHaveCount(0);
-    await expect(pasted.locator('.handle-input .vue-flow__handle').nth(0)).toHaveAttribute("data-handleid", "input-1");
-    await expect(pasted.locator('.handle-input .vue-flow__handle').nth(1)).toHaveAttribute("data-handleid", "input-2");
-    await expect(pasted.locator('.handle-output .vue-flow__handle').nth(0)).toHaveAttribute("data-handleid", "output-0");
-    await expect(pasted.locator('.handle-output .vue-flow__handle').nth(1)).toHaveAttribute("data-handleid", "output-1");
-    await expect(pasted.locator('.handle-input .vue-flow__handle').nth(0)).toHaveAttribute("title", "Orders");
-    await expect(pasted.locator('.handle-input .vue-flow__handle').nth(1)).toHaveAttribute("title", "Customers");
-    await expect(pasted.locator('.handle-output .vue-flow__handle').nth(0)).toHaveAttribute("title", "Result");
-    await expect(pasted.locator('.handle-output .vue-flow__handle').nth(1)).toHaveAttribute("title", "Rejected");
-  });
+  }
 
   test("paste aimed at overlay-panel chrome never touches the canvas", async ({
     page,
