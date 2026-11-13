@@ -853,7 +853,7 @@ def test_staged_connection_accept_enforces_ports_and_occupancy(
         assert diff.get_diff(diff_id) is None
     else:
         assert accept.status_code == 422, accept.text
-        assert accept.json()["detail"] == expected_error
+        assert accept.json()["detail"] == f"apply_diff failed: 422: {expected_error}"
         assert in_scope_hash(registered_flow.get_flowfile_data().model_dump()) == before_hash
         assert registered_flow.get_node(2) is None
         # Rollback may rebuild nodes: reacquire and compare state, not object identity.
