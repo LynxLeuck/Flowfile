@@ -1,0 +1,47 @@
+name: Fork TLS crash investigation
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  tls:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-26.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11.18'
+      - name: Install locked dependencies
+        run: |
+          pip install poetry
+          poetry install --no-interaction --no-ansi --with dev
+      - name: Record runtime and dependency implementation
+        run: |
+          poetry run python -c 'import sys, ssl, inspect, websockets, websockets.sync.connection as c; print(sys.version, ssl.OPENSSL_VERSION, websockets.__version__); print(inspect.getsource(c.Connection.recv_events)); print(inspect.getsource(c.Connection.send_data))'
+      - name: Start maintained test services
+        run: |
+          poetry run start_postgres
+          poetry run start_mysql
+          poetry run start_mssql
+          poetry run start_minio
+          poetry run start_azurite
+          poetry run start_gcs
+      - name: Repeated real TLS worker regression
+        env:
+          PYTHONFAULTHANDLER: '1'
+        run: |
+          set -o pipefail
+          for attempt in {1..30}; do
+            printf '\nTLS repetition %s\n' "$attempt"
+            poetry run pytest flowfile_core/tests/flowfile/execution/test_worker_tls.py -vv -rA --disable-warnings 2>&1 | tee -a tls-repetitions.log
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tls-evidence-${{ matrix.os }}
+          path: tls-repetitions.log
