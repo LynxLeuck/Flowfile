@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, ubuntu-26.04]
+        os: [ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
@@ -39,9 +39,12 @@ jobs:
           PYTHONFAULTHANDLER: '1'
         run: |
           set -o pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y gdb
+          python_bin=$(poetry run python -c 'import sys; print(sys.executable)')
           for attempt in {1..30}; do
             printf '\nTLS repetition %s\n' "$attempt"
-            poetry run pytest flowfile_core/tests/flowfile/execution/test_worker_tls.py -vv -rA --disable-warnings 2>&1 | tee -a tls-repetitions.log
+            gdb --batch --return-child-result -ex 'set pagination off' -ex run -ex 'thread apply all bt' --args "$python_bin" -m pytest flowfile_core/tests/flowfile/execution/test_worker_tls.py -vv -rA --disable-warnings 2>&1 | tee -a tls-repetitions.log
           done
       - uses: actions/upload-artifact@v4
         if: always()
