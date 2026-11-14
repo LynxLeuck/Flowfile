@@ -1,5 +1,8 @@
 name: Fork TLS crash investigation
 on:
+  push:
+    branches: [diagnostic/718-tls-crash]
+    paths: [.github/workflows/fork-tls-crash.yml]
   workflow_dispatch:
 permissions:
   contents: read
