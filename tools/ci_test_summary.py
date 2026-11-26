@@ -72,6 +72,8 @@ def main():
         lines[2:2] = ['Artifact download failed; some test evidence may be unavailable.', '']
     if evidence.get('run_url'):
         lines[2:2] = [link('GitHub Actions run', evidence['run_url']), '']
+    if evidence.get('source_conclusion'):
+        lines[2:2] = [f"Source workflow result: {cell(evidence['source_conclusion'])}", '']
     failures = []
     for invocation in evidence['invocations']:
         status, counts, problems = junit_result(args.evidence.resolve().parent, invocation.get('junit'))
@@ -97,7 +99,8 @@ def main():
     if evidence.get('observed_jobs'):
         lines.extend(['', '## GitHub Actions jobs observed at report time', ''])
         for job in evidence['observed_jobs']:
-            lines.append(f"- {link(job['name'], job['url'])}: {cell(job['conclusion'] or job['status'])}")
+            missing = ' · no linked JUnit' if job.get('has_junit_candidate') is False else ''
+            lines.append(f"- {link(job['name'], job['url'])}: {cell(job['conclusion'] or job['status'])}{missing}")
     if failures:
         lines.extend(['', '## Test failures and errors', '', *failures])
     args.output.mkdir(parents=True, exist_ok=True)

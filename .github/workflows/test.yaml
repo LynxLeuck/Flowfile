@@ -211,23 +211,13 @@ jobs:
         # Kafka tests need a broker; they run in test-kafka-integration.yml
         run: poetry run pytest shared/tests --ignore=shared/tests/kafka --disable-warnings --junitxml=ci-junit/shared.xml -o junit_logging=no
 
-      - name: Upload shared pytest evidence
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-junit-${{ github.run_attempt }}-linux-backend-${{ strategy.job-index }}
-          path: ci-junit/*.xml
-          if-no-files-found: ignore
-          retention-days: 7
-
       - name: Run pytest for flowfile_frame
         if: |
           needs.detect-changes.outputs.backend_frame == 'true' ||
           needs.detect-changes.outputs.shared == 'true' ||
           needs.detect-changes.outputs.test_workflow == 'true' ||
           github.event.inputs.run_all_tests == 'true'
-        run: poetry run pytest flowfile_frame/tests --disable-warnings
+        run: poetry run pytest flowfile_frame/tests --disable-warnings --junitxml=ci-junit/frame.xml -o junit_logging=no
 
       - name: Run pytest for flowfile_core
         if: |
@@ -235,7 +225,7 @@ jobs:
           needs.detect-changes.outputs.shared == 'true' ||
           needs.detect-changes.outputs.test_workflow == 'true' ||
           github.event.inputs.run_all_tests == 'true'
-        run: poetry run pytest flowfile_core/tests -m "${{ matrix.core_marks }}" --disable-warnings --durations=300 --durations-min=0.05
+        run: poetry run pytest flowfile_core/tests -m "${{ matrix.core_marks }}" --disable-warnings --durations=300 --durations-min=0.05 --junitxml=ci-junit/core.xml -o junit_logging=no
 
       - name: Run pytest for flowfile_worker
         if: |
@@ -243,7 +233,7 @@ jobs:
           needs.detect-changes.outputs.shared == 'true' ||
           needs.detect-changes.outputs.test_workflow == 'true' ||
           github.event.inputs.run_all_tests == 'true'
-        run: poetry run pytest flowfile_worker/tests --disable-warnings --durations=300 --durations-min=0.05
+        run: poetry run pytest flowfile_worker/tests --disable-warnings --durations=300 --durations-min=0.05 --junitxml=ci-junit/worker.xml -o junit_logging=no
 
       # Real core + worker subprocesses driven over HTTP against the MinIO started above.
       - name: Run cloud storage end-to-end tests
@@ -256,7 +246,7 @@ jobs:
             needs.detect-changes.outputs.test_workflow == 'true' ||
             github.event.inputs.run_all_tests == 'true'
           )
-        run: poetry run pytest tests/cloud_e2e -m cloud_e2e --disable-warnings
+        run: poetry run pytest tests/cloud_e2e -m cloud_e2e --disable-warnings --junitxml=ci-junit/cloud-e2e.xml -o junit_logging=no
 
       - name: Stop Mock Database
         run: poetry run stop_postgres
@@ -280,7 +270,17 @@ jobs:
           needs.detect-changes.outputs.test_workflow == 'true' ||
           github.event.inputs.run_all_tests == 'true'
         shell: pwsh
-        run: poetry run pytest flowfile/tests tools/tests --disable-warnings
+        run: poetry run pytest flowfile/tests tools/tests --disable-warnings --junitxml=ci-junit/flowfile.xml -o junit_logging=no
+
+      - name: Upload JUnit evidence
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-junit-${{ github.run_attempt }}-backend-tests (${{ matrix.os }}, ${{ matrix.python-version }}, ${{ matrix.core_marks }})
+          path: ci-junit/*.xml
+          if-no-files-found: ignore
+          retention-days: 7
 
   # Coverage job - runs core+worker WITH coverage on a dedicated runner so it
   # stays off the functional matrix's critical path. COVERAGE_CORE=sysmon selects
@@ -336,8 +336,8 @@ jobs:
           COVERAGE_CORE: sysmon
           FLOWFILE_WORKER_POOL_SIZE: "2"
         run: |
-          poetry run pytest flowfile_core/tests -m "not kernel and not docker_integration" --disable-warnings --cov --cov-append --cov-report=
-          poetry run pytest flowfile_worker/tests --disable-warnings --cov --cov-append --cov-report=
+          poetry run pytest flowfile_core/tests -m "not kernel and not docker_integration" --disable-warnings --cov --cov-append --cov-report= --junitxml=ci-junit/coverage-core.xml -o junit_logging=no
+          poetry run pytest flowfile_worker/tests --disable-warnings --cov --cov-append --cov-report= --junitxml=ci-junit/coverage-worker.xml -o junit_logging=no
 
       - name: Generate coverage report
         run: |
@@ -367,6 +367,16 @@ jobs:
           flags: backend
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Upload JUnit evidence
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-junit-${{ github.run_attempt }}-coverage
+          path: ci-junit/*.xml
+          if-no-files-found: ignore
+          retention-days: 7
 
   # ---------------------------------------------------------------------------
   # Windows backend tests, split into three shards.
@@ -426,6 +436,19 @@ jobs:
           CHANGES: ${{ toJSON(needs.detect-changes.outputs) }}
           RUN_ALL: ${{ github.event.inputs.run_all_tests }}
         run: python3 tools/windows_test_evidence.py plan
+      - name: Save expected suites for the completed-run report
+        continue-on-error: true
+        env:
+          WINDOWS_PLAN: ${{ steps.plan.outputs.plan }}
+        run: python3 tools/windows_test_evidence.py publish-plan
+      - name: Upload expected suite inventory
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-plan-${{ github.run_attempt }}-windows
+          path: windows-plan.json
+          if-no-files-found: error
+          retention-days: 7
 
   windows-test-shards:
     name: backend-tests-windows-shard (${{ matrix.shard }})
@@ -516,42 +539,6 @@ jobs:
             exit 1
           fi
 
-  windows-test-report:
-    needs: [windows-test-plan, windows-test-shards, backend-tests]
-    if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    permissions:
-      contents: read
-      actions: read
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - name: Download current-attempt JUnit evidence
-        id: download
-        uses: actions/download-artifact@v4
-        continue-on-error: true
-        with:
-          pattern: test-junit-${{ github.run_attempt }}-*
-          path: windows-evidence
-      - name: Render Windows test report
-        env:
-          GH_TOKEN: ${{ github.token }}
-          WINDOWS_PLAN: ${{ needs.windows-test-plan.outputs.plan }}
-          MATRIX_OUTCOME: ${{ needs.windows-test-shards.result }}
-          DOWNLOAD_OUTCOME: ${{ steps.download.outcome }}
-        run: |
-          python3 tools/windows_test_evidence.py report
-          python3 tools/ci_test_summary.py windows-evidence/evidence.json windows-summary
-          cat windows-summary/test-summary.md >> "$GITHUB_STEP_SUMMARY"
-      - name: Upload machine-readable test summary
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-test-summary-${{ github.run_attempt }}
-          path: windows-summary/test-summary.json
-          if-no-files-found: error
-          retention-days: 7
 
   # Kernel integration tests - runs in parallel on a separate worker
   kernel-tests:
@@ -589,13 +576,23 @@ jobs:
       - name: Run kernel_runtime unit tests
         run: |
           pip install -e "kernel_runtime/[test]"
-          python -m pytest kernel_runtime/tests -v --disable-warnings
+          python -m pytest kernel_runtime/tests -v --disable-warnings --junitxml=ci-junit/kernel-runtime.xml -o junit_logging=no
 
       - name: Run kernel integration tests
         run: |
           # faulthandler_timeout dumps every thread's stack from a C watchdog (works even when a native
           # call wedges while holding the GIL); --timeout kills the run when Python-level timers can fire.
-          poetry run pytest flowfile_core/tests -m kernel -v --disable-warnings -o faulthandler_timeout=600 --timeout=900 --timeout-method=thread
+          poetry run pytest flowfile_core/tests -m kernel -v --disable-warnings -o faulthandler_timeout=600 --timeout=900 --timeout-method=thread --junitxml=ci-junit/kernel-integration.xml -o junit_logging=no
+
+      - name: Upload JUnit evidence
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-junit-${{ github.run_attempt }}-kernel-tests
+          path: ci-junit/*.xml
+          if-no-files-found: ignore
+          retention-days: 7
 
   # Type-stub drift check — runs when flowfile_frame source changes.
   # Regenerates the .pyi stubs and fails if they don't match what's committed.
@@ -750,7 +747,7 @@ jobs:
         run: npm ci
 
       - name: Run frontend unit tests (vitest)
-        run: npm run test:unit
+        run: npm run test:unit -- --reporter=default --reporter=junit --outputFile=ci-junit.xml
 
       - name: Build Web Version
         run: npm run build:web
@@ -766,6 +763,16 @@ jobs:
             echo "Port 4173 is not available or did not return 200 OK"
             exit 1
           fi
+
+      - name: Upload JUnit evidence
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-junit-${{ github.run_attempt }}-test-web
+          path: flowfile_frontend/ci-junit.xml
+          if-no-files-found: ignore
+          retention-days: 7
 
   # Documentation build test - runs when docs change or test workflow changes
   docs-test:

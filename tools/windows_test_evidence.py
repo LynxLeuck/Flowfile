@@ -152,6 +152,48 @@ def github_pages(endpoint, key):
         return None
 
 
+def read_expected_plan(directory, attempt):
+    path = directory / f'test-plan-{attempt}-windows' / 'windows-plan.json'
+    if path.resolve().is_relative_to(directory.resolve()):
+        plan = read_metadata(path)
+        if all(NAME.fullmatch(shard) and isinstance(suites, dict) and all(
+            NAME.fullmatch(suite) and isinstance(spec, dict) and type(spec.get('expected')) is bool
+            for suite, spec in suites.items()
+        ) for shard, suites in plan.items()):
+            return plan
+    return {}
+
+
+
+def collect_run_evidence(directory, *, attempt, commit_sha, run_id, download_outcome, job_pages):
+    """Keep the latest execution per job, including jobs untouched by a partial rerun."""
+    latest = {}
+    for number, jobs in job_pages.items():
+        for job in jobs or ():
+            latest[job['name']] = (number, job)
+    complete = all(jobs is not None for jobs in job_pages.values())
+    plan = next((plan for number in range(attempt, 0, -1)
+                 if (plan := read_expected_plan(directory, number))), {})
+    result = {'commit_sha': commit_sha, 'run_id': run_id, 'attempt': attempt,
+              'matrix_outcome': None, 'download_outcome': download_outcome, 'invocations': []}
+    for number in range(1, attempt + 1) if complete else (attempt,):
+        snapshot = build_evidence(plan, directory, commit_sha=commit_sha, run_id=run_id,
+                                  attempt=number, matrix_outcome=None, download_outcome=download_outcome)
+        for row in snapshot['invocations']:
+            name = (f"backend-tests-windows-shard ({row['shard']})"
+                    if row['platform'] == 'Windows' else row['shard'])
+            selected, job = latest.get(name, (attempt, None))
+            if selected != number and complete:
+                continue
+            row['source_attempt'] = number
+            if job:
+                row['job_name'] = name
+                row['job_outcome'] = job['conclusion'] or 'unknown'
+                row['job_url'] = job.get('html_url')
+            result['invocations'].append(row)
+    return result, [job for _, job in latest.values()]
+
+
 def main(mode):
     if mode == 'plan':
         config = json.loads(CONFIG.read_text(encoding='utf-8'), object_pairs_hook=unique_object)
@@ -159,6 +201,11 @@ def main(mode):
         with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
             for key, value in {'plan': plan, 'matrix': matrix, 'selected': bool(matrix['include'])}.items():
                 print(f'{key}={json.dumps(value, separators=(",", ":"))}', file=output)
+    elif mode == 'publish-plan':
+        plan = json.loads(os.environ['WINDOWS_PLAN'])
+        expected = {shard: {suite: {'expected': spec['expected']} for suite, spec in suites.items()}
+                    for shard, suites in plan.items()}
+        Path('windows-plan.json').write_text(json.dumps(expected), encoding='utf-8')
     elif mode == 'run':
         plan = json.loads(os.environ['WINDOWS_PLAN'])
         return run_suites(plan[os.environ['WINDOWS_SHARD']], REPORTS)
@@ -170,18 +217,24 @@ def main(mode):
         REPORTS.mkdir(exist_ok=True)
         (REPORTS / 'shard.json').write_text(json.dumps({'outcome': outcome, 'setup_failed': setup_failed}), encoding='utf-8')
     elif mode == 'report':
-        evidence = build_evidence(
-            json.loads(os.environ['WINDOWS_PLAN'] or '{}'), EVIDENCE, commit_sha=os.environ['GITHUB_SHA'],
-            run_id=os.environ['GITHUB_RUN_ID'], attempt=int(os.environ['GITHUB_RUN_ATTEMPT']),
-            matrix_outcome=os.environ['MATRIX_OUTCOME'], download_outcome=os.environ['DOWNLOAD_OUTCOME'],
-        )
+        attempt = int(os.environ['SOURCE_ATTEMPT'])
         repository = os.environ['GITHUB_REPOSITORY']
-        run_url = f"{os.environ['GITHUB_SERVER_URL']}/{repository}/actions/runs/{evidence['run_id']}"
-        endpoint = f"repos/{repository}/actions/runs/{evidence['run_id']}"
-        jobs = github_pages(f"{endpoint}/attempts/{evidence['attempt']}/jobs?per_page=100", 'jobs')
+        run_id = os.environ['SOURCE_RUN_ID']
+        run_url = f"{os.environ['GITHUB_SERVER_URL']}/{repository}/actions/runs/{run_id}"
+        endpoint = f"repos/{repository}/actions/runs/{run_id}"
+        job_pages = {number: github_pages(f'{endpoint}/attempts/{number}/jobs?per_page=100', 'jobs')
+                     for number in range(1, attempt + 1)}
+        evidence, jobs = collect_run_evidence(
+            EVIDENCE, attempt=attempt, commit_sha=os.environ['SOURCE_SHA'], run_id=run_id,
+            download_outcome=os.environ['DOWNLOAD_OUTCOME'], job_pages=job_pages,
+        )
+        evidence['source_conclusion'] = os.environ['SOURCE_CONCLUSION']
         artifacts = github_pages(f'{endpoint}/artifacts?per_page=100', 'artifacts')
         attach_github_observations(evidence, jobs or [], artifacts or [], run_url)
-        evidence['github_metadata'] = {'jobs_available': jobs is not None, 'artifacts_available': artifacts is not None}
+        reported_jobs = {row.get('job_name') for row in evidence['invocations'] if row.get('junit')}
+        for job in evidence['observed_jobs']:
+            job['has_junit_candidate'] = job['name'] in reported_jobs
+        evidence['github_metadata'] = {'jobs_available': all(page is not None for page in job_pages.values()), 'artifacts_available': artifacts is not None}
         EVIDENCE.mkdir(exist_ok=True)
         (EVIDENCE / 'evidence.json').write_text(json.dumps(evidence), encoding='utf-8')
     else:

@@ -106,3 +106,23 @@ def test_stable_gate_uses_native_matrix_result(detect, plan, expected, selected,
         **os.environ, 'DETECT': detect, 'PLAN': plan, 'EXPECTED': expected, 'SELECTED': selected, 'MATRIX': matrix,
     }, capture_output=True, text=True)
     assert result.returncode == code, result.stderr
+
+
+def test_partial_rerun_preserves_untouched_jobs_but_not_stale_results(tmp_path):
+    from tools.windows_test_evidence import collect_run_evidence
+
+    for attempt, name in [(1, 'untouched'), (1, 'rerun'), (2, 'new check')]:
+        directory = tmp_path / f'test-junit-{attempt}-{name}'
+        directory.mkdir()
+        (directory / 'suite.xml').write_text('<testsuite/>', encoding='utf-8')
+    def job(name):
+        return {'name': name, 'conclusion': 'success', 'html_url': f'https://example.com/{name}'}
+
+    evidence, jobs = collect_run_evidence(
+        tmp_path, attempt=2, commit_sha='abc', run_id='42', download_outcome='success',
+        job_pages={1: [job('untouched'), job('rerun')], 2: [job('rerun'), job('new check')]},
+    )
+    assert {(row['job_name'], row['source_attempt']) for row in evidence['invocations']} == {
+        ('untouched', 1), ('new check', 2),
+    }
+    assert len(jobs) == 3
