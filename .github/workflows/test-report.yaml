@@ -1,0 +1,48 @@
+name: Test Report
+
+on:
+  workflow_run:
+    workflows: [Run Tests]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      # Use the trusted reporting workflow revision, not code from the test run.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Download source-run JUnit evidence and plan
+        id: download
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+          pattern: 'test-{junit,plan}-*'
+          path: windows-evidence
+      - name: Render completed run report
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+          SOURCE_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          SOURCE_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          DOWNLOAD_OUTCOME: ${{ steps.download.outcome }}
+        run: |
+          python3 tools/windows_test_evidence.py report
+          python3 tools/ci_test_summary.py windows-evidence/evidence.json test-summary
+          cat test-summary/test-summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload machine-readable test summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-summary-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
+          path: test-summary/test-summary.json
+          if-no-files-found: error
+          retention-days: 7
