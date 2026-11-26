@@ -410,8 +410,8 @@ jobs:
       POETRY_VIRTUALENVS_IN_PROJECT: "true"
     outputs:
       report_attempt: ${{ steps.report-attempt.outputs.attempt }}
+      test_outcomes: ${{ steps.report-test-outcomes.outputs.outcomes }}
       setup_failed: ${{ steps.install-dependencies.outcome == 'failure' }}
-      test_core: ${{ steps.test-core.outcome }}
     steps:
       - name: Record test report attempt
         id: report-attempt
@@ -457,12 +457,26 @@ jobs:
         shell: pwsh
         run: poetry run pytest flowfile_core/tests/flowfile flowfile_core/tests/project flowfile_core/tests/test_migration.py -m "not kernel" --disable-warnings --durations=300 --durations-min=0.05 --junitxml=windows-junit/core.xml -o junit_logging=no
 
+      - name: Collect test step outcomes
+        id: report-test-outcomes
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        shell: pwsh
+        env:
+          STEPS_JSON: ${{ toJSON(steps) }}
+        run: |
+          $outcomes = @{}
+          ($env:STEPS_JSON | ConvertFrom-Json -AsHashtable).GetEnumerator() | ForEach-Object {
+            if ($_.Key.StartsWith('test-')) { $outcomes[$_.Key] = $_.Value.outcome }
+          }
+          "outcomes=$($outcomes | ConvertTo-Json -Compress)" >> $env:GITHUB_OUTPUT
+
       - name: Upload Windows JUnit evidence
         if: ${{ !cancelled() }}
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: windows-junit-${{ github.run_attempt }}-core-a
+          name: windows-junit-${{ github.run_attempt }}-${{ github.job }}
           path: windows-junit/*.xml
           if-no-files-found: ignore
           retention-days: 7
@@ -480,8 +494,8 @@ jobs:
       POETRY_VIRTUALENVS_IN_PROJECT: "true"
     outputs:
       report_attempt: ${{ steps.report-attempt.outputs.attempt }}
+      test_outcomes: ${{ steps.report-test-outcomes.outputs.outcomes }}
       setup_failed: ${{ steps.install-dependencies.outcome == 'failure' }}
-      test_core: ${{ steps.test-core.outcome }}
     steps:
       - name: Record test report attempt
         id: report-attempt
@@ -528,12 +542,26 @@ jobs:
         shell: pwsh
         run: poetry run pytest flowfile_core/tests --ignore=flowfile_core/tests/flowfile --ignore=flowfile_core/tests/project --ignore=flowfile_core/tests/test_migration.py -m "not kernel" --disable-warnings --durations=300 --durations-min=0.05 --junitxml=windows-junit/core.xml -o junit_logging=no
 
+      - name: Collect test step outcomes
+        id: report-test-outcomes
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        shell: pwsh
+        env:
+          STEPS_JSON: ${{ toJSON(steps) }}
+        run: |
+          $outcomes = @{}
+          ($env:STEPS_JSON | ConvertFrom-Json -AsHashtable).GetEnumerator() | ForEach-Object {
+            if ($_.Key.StartsWith('test-')) { $outcomes[$_.Key] = $_.Value.outcome }
+          }
+          "outcomes=$($outcomes | ConvertTo-Json -Compress)" >> $env:GITHUB_OUTPUT
+
       - name: Upload Windows JUnit evidence
         if: ${{ !cancelled() }}
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: windows-junit-${{ github.run_attempt }}-core-b
+          name: windows-junit-${{ github.run_attempt }}-${{ github.job }}
           path: windows-junit/*.xml
           if-no-files-found: ignore
           retention-days: 7
@@ -551,11 +579,8 @@ jobs:
       POETRY_VIRTUALENVS_IN_PROJECT: "true"
     outputs:
       report_attempt: ${{ steps.report-attempt.outputs.attempt }}
+      test_outcomes: ${{ steps.report-test-outcomes.outputs.outcomes }}
       setup_failed: ${{ steps.install-dependencies.outcome == 'failure' }}
-      test_shared: ${{ steps.test-shared.outcome }}
-      test_frame: ${{ steps.test-frame.outcome }}
-      test_worker: ${{ steps.test-worker.outcome }}
-      test_flowfile: ${{ steps.test-flowfile.outcome }}
     steps:
       - name: Record test report attempt
         id: report-attempt
@@ -631,17 +656,33 @@ jobs:
         shell: pwsh
         run: poetry run pytest flowfile/tests --disable-warnings --junitxml=windows-junit/flowfile.xml -o junit_logging=no
 
+      - name: Collect test step outcomes
+        id: report-test-outcomes
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        shell: pwsh
+        env:
+          STEPS_JSON: ${{ toJSON(steps) }}
+        run: |
+          $outcomes = @{}
+          ($env:STEPS_JSON | ConvertFrom-Json -AsHashtable).GetEnumerator() | ForEach-Object {
+            if ($_.Key.StartsWith('test-')) { $outcomes[$_.Key] = $_.Value.outcome }
+          }
+          "outcomes=$($outcomes | ConvertTo-Json -Compress)" >> $env:GITHUB_OUTPUT
+
       - name: Upload Windows JUnit evidence
         if: ${{ !cancelled() }}
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: windows-junit-${{ github.run_attempt }}-pkg-other
+          name: windows-junit-${{ github.run_attempt }}-${{ github.job }}
           path: windows-junit/*.xml
           if-no-files-found: ignore
           retention-days: 7
 
-  # Fan-in for the three Windows shards. `backend-tests-windows` is a required
+  # Fan-in for the Windows shards. Register backend-tests-windows-* jobs here;
+  # the report discovers their test-* steps and JUnit filenames from this file.
+  # `backend-tests-windows` is a required
   # branch-protection context, so this job id must not change - it is the only
   # thing GitHub still reports under that name.
   #
@@ -652,24 +693,24 @@ jobs:
     needs: [detect-changes, backend-tests-windows-core-a, backend-tests-windows-core-b, backend-tests-windows-pkg-other]
     if: always()
     runs-on: ubuntu-latest
+    outputs:
+      report_needs: ${{ toJSON(needs) }}
     steps:
       - name: Check Windows shard results
         env:
           DETECT: ${{ needs.detect-changes.result }}
-          CORE_A: ${{ needs.backend-tests-windows-core-a.result }}
-          CORE_B: ${{ needs.backend-tests-windows-core-b.result }}
-          PKG_OTHER: ${{ needs.backend-tests-windows-pkg-other.result }}
+          SHARD_NEEDS: ${{ toJSON(needs) }}
           # Same expression as each shard's job-level `if:`. When it is false the
           # path filters excluded the whole group (e.g. a docs-only change) and
-          # three skipped shards are the correct, passing outcome.
+          # skipped shards are the correct, passing outcome.
           SHARDS_EXPECTED: ${{ needs.detect-changes.outputs.any_backend == 'true' || needs.detect-changes.outputs.test_workflow == 'true' || github.event.inputs.run_all_tests == 'true' }}
         run: |
           echo "=== Windows shard results ==="
           echo "  detect-changes: $DETECT"
           echo "  shards expected to run: $SHARDS_EXPECTED"
-          echo "  core-a:    $CORE_A"
-          echo "  core-b:    $CORE_B"
-          echo "  pkg-other: $PKG_OTHER"
+          shards=$(jq -er '[to_entries[] | select(.key | startswith("backend-tests-windows-")) | "\(.key):\(.value.result)"] | if length == 0 then error("No Windows shard dependencies") else .[] end' <<< "$SHARD_NEEDS") || exit 1
+          mapfile -t results <<< "$shards"
+          printf '  %s\n' "${results[@]}"
           echo ""
 
           # Without a trustworthy detect-changes there is no trustworthy
@@ -680,9 +721,9 @@ jobs:
           fi
 
           if [[ "$SHARDS_EXPECTED" != "true" ]]; then
-            for r in "$CORE_A" "$CORE_B" "$PKG_OTHER"; do
-              if [[ "$r" != "skipped" ]]; then
-                echo "ERROR: no Windows shard should have run, but one reported '$r'."
+            for shard in "${results[@]}"; do
+              if [[ "${shard#*:}" != "skipped" ]]; then
+                echo "ERROR: no Windows shard should have run, but '$shard' did."
                 exit 1
               fi
             done
@@ -695,7 +736,7 @@ jobs:
           # nothing, and reporting it green is exactly the false-green trap this
           # job exists to close.
           status=0
-          for shard in "core-a:$CORE_A" "core-b:$CORE_B" "pkg-other:$PKG_OTHER"; do
+          for shard in "${results[@]}"; do
             if [[ "${shard#*:}" != "success" ]]; then
               echo "ERROR: Windows shard '${shard%%:*}' reported '${shard#*:}' (expected 'success')."
               status=1
@@ -709,7 +750,7 @@ jobs:
 
   # Reporting only: the existing Windows fan-in remains the required gate.
   windows-test-report:
-    needs: [detect-changes, backend-tests-windows-core-a, backend-tests-windows-core-b, backend-tests-windows-pkg-other]
+    needs: backend-tests-windows
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -724,16 +765,17 @@ jobs:
         with:
           pattern: windows-junit-${{ github.run_attempt }}-*
           path: windows-evidence
+      - name: Set up report parser
+        run: |
+          python3 -m venv "$RUNNER_TEMP/report-venv"
+          "$RUNNER_TEMP/report-venv/bin/python" -m pip install --only-binary=:all: PyYAML==6.0.3
       - name: Render Windows test report
         env:
-          NEEDS_JSON: ${{ toJSON(needs) }}
+          NEEDS_JSON: ${{ needs.backend-tests-windows.outputs.report_needs }}
           RUN_ALL: ${{ github.event.inputs.run_all_tests }}
           DOWNLOAD_OUTCOME: ${{ steps.download.outcome }}
-          WINDOWS_INVENTORY: >-
-            {"core-a":{"core":"backend_core"},"core-b":{"core":"backend_core"},
-            "pkg-other":{"shared":"shared","frame":"backend_frame","worker":"backend_worker","flowfile":"backend_flowfile"}}
         run: |
-          python3 tools/windows_test_evidence.py
+          "$RUNNER_TEMP/report-venv/bin/python" tools/windows_test_evidence.py
           python3 tools/ci_test_summary.py windows-evidence/evidence.json windows-summary
           cat windows-summary/test-summary.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload machine-readable test summary
