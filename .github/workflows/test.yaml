@@ -408,7 +408,16 @@ jobs:
     runs-on: windows-latest
     env:
       POETRY_VIRTUALENVS_IN_PROJECT: "true"
+    outputs:
+      report_attempt: ${{ steps.report-attempt.outputs.attempt }}
+      setup_failed: ${{ steps.install-dependencies.outcome == 'failure' }}
+      test_core: ${{ steps.test-core.outcome }}
     steps:
+      - name: Record test report attempt
+        id: report-attempt
+        shell: pwsh
+        continue-on-error: true
+        run: '"attempt=$env:GITHUB_RUN_ATTEMPT" >> $env:GITHUB_OUTPUT'
       - uses: actions/checkout@v4
 
       - name: Set up Python 3.11
@@ -433,18 +442,31 @@ jobs:
       # Always runs, cache hit or not — it is fast against a warm venv and self-heals
       # any drift between the restored env and poetry.lock.
       - name: Install Dependencies
+        id: install-dependencies
         shell: pwsh
         run: |
           poetry install --no-interaction --no-ansi --with dev
 
       - name: Run pytest for flowfile_core (shard core-a)
+        id: test-core
         if: |
           needs.detect-changes.outputs.backend_core == 'true' ||
           needs.detect-changes.outputs.shared == 'true' ||
           needs.detect-changes.outputs.test_workflow == 'true' ||
           github.event.inputs.run_all_tests == 'true'
         shell: pwsh
-        run: poetry run pytest flowfile_core/tests/flowfile flowfile_core/tests/project flowfile_core/tests/test_migration.py -m "not kernel" --disable-warnings --durations=300 --durations-min=0.05
+        run: poetry run pytest flowfile_core/tests/flowfile flowfile_core/tests/project flowfile_core/tests/test_migration.py -m "not kernel" --disable-warnings --durations=300 --durations-min=0.05 --junitxml=windows-junit/core.xml -o junit_logging=no
+
+      - name: Upload Windows JUnit evidence
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-junit-${{ github.run_attempt }}-core-a
+          path: windows-junit/*.xml
+          if-no-files-found: ignore
+          retention-days: 7
+
 
   backend-tests-windows-core-b:
     name: backend-tests-windows-shard (core-b)
@@ -456,7 +478,16 @@ jobs:
     runs-on: windows-latest
     env:
       POETRY_VIRTUALENVS_IN_PROJECT: "true"
+    outputs:
+      report_attempt: ${{ steps.report-attempt.outputs.attempt }}
+      setup_failed: ${{ steps.install-dependencies.outcome == 'failure' }}
+      test_core: ${{ steps.test-core.outcome }}
     steps:
+      - name: Record test report attempt
+        id: report-attempt
+        shell: pwsh
+        continue-on-error: true
+        run: '"attempt=$env:GITHUB_RUN_ATTEMPT" >> $env:GITHUB_OUTPUT'
       - uses: actions/checkout@v4
 
       - name: Set up Python 3.11
@@ -481,19 +512,32 @@ jobs:
       # Always runs, cache hit or not — it is fast against a warm venv and self-heals
       # any drift between the restored env and poetry.lock.
       - name: Install Dependencies
+        id: install-dependencies
         shell: pwsh
         run: |
           poetry install --no-interaction --no-ansi --with dev
 
       # The --ignore set must stay in lockstep with core-a's path list above.
       - name: Run pytest for flowfile_core (shard core-b)
+        id: test-core
         if: |
           needs.detect-changes.outputs.backend_core == 'true' ||
           needs.detect-changes.outputs.shared == 'true' ||
           needs.detect-changes.outputs.test_workflow == 'true' ||
           github.event.inputs.run_all_tests == 'true'
         shell: pwsh
-        run: poetry run pytest flowfile_core/tests --ignore=flowfile_core/tests/flowfile --ignore=flowfile_core/tests/project --ignore=flowfile_core/tests/test_migration.py -m "not kernel" --disable-warnings --durations=300 --durations-min=0.05
+        run: poetry run pytest flowfile_core/tests --ignore=flowfile_core/tests/flowfile --ignore=flowfile_core/tests/project --ignore=flowfile_core/tests/test_migration.py -m "not kernel" --disable-warnings --durations=300 --durations-min=0.05 --junitxml=windows-junit/core.xml -o junit_logging=no
+
+      - name: Upload Windows JUnit evidence
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-junit-${{ github.run_attempt }}-core-b
+          path: windows-junit/*.xml
+          if-no-files-found: ignore
+          retention-days: 7
+
 
   backend-tests-windows-pkg-other:
     name: backend-tests-windows-shard (pkg-other)
@@ -505,7 +549,19 @@ jobs:
     runs-on: windows-latest
     env:
       POETRY_VIRTUALENVS_IN_PROJECT: "true"
+    outputs:
+      report_attempt: ${{ steps.report-attempt.outputs.attempt }}
+      setup_failed: ${{ steps.install-dependencies.outcome == 'failure' }}
+      test_shared: ${{ steps.test-shared.outcome }}
+      test_frame: ${{ steps.test-frame.outcome }}
+      test_worker: ${{ steps.test-worker.outcome }}
+      test_flowfile: ${{ steps.test-flowfile.outcome }}
     steps:
+      - name: Record test report attempt
+        id: report-attempt
+        shell: pwsh
+        continue-on-error: true
+        run: '"attempt=$env:GITHUB_RUN_ATTEMPT" >> $env:GITHUB_OUTPUT'
       - uses: actions/checkout@v4
 
       - name: Set up Python 3.11
@@ -530,45 +586,60 @@ jobs:
       # Always runs, cache hit or not — it is fast against a warm venv and self-heals
       # any drift between the restored env and poetry.lock.
       - name: Install Dependencies
+        id: install-dependencies
         shell: pwsh
         run: |
           poetry install --no-interaction --no-ansi --with dev
 
       # Kafka tests need a broker; they run in test-kafka-integration.yml
       - name: Run pytest for shared
+        id: test-shared
         if: |
           needs.detect-changes.outputs.shared == 'true' ||
           needs.detect-changes.outputs.test_workflow == 'true' ||
           github.event.inputs.run_all_tests == 'true'
         shell: pwsh
-        run: poetry run pytest shared/tests --ignore=shared/tests/kafka --disable-warnings
+        run: poetry run pytest shared/tests --ignore=shared/tests/kafka --disable-warnings --junitxml=windows-junit/shared.xml -o junit_logging=no
 
       - name: Run pytest for flowfile_frame
+        id: test-frame
         if: |
           needs.detect-changes.outputs.backend_frame == 'true' ||
           needs.detect-changes.outputs.shared == 'true' ||
           needs.detect-changes.outputs.test_workflow == 'true' ||
           github.event.inputs.run_all_tests == 'true'
         shell: pwsh
-        run: poetry run pytest flowfile_frame/tests --disable-warnings
+        run: poetry run pytest flowfile_frame/tests --disable-warnings --junitxml=windows-junit/frame.xml -o junit_logging=no
 
       - name: Run pytest for flowfile_worker
+        id: test-worker
         if: |
           needs.detect-changes.outputs.backend_worker == 'true' ||
           needs.detect-changes.outputs.shared == 'true' ||
           needs.detect-changes.outputs.test_workflow == 'true' ||
           github.event.inputs.run_all_tests == 'true'
         shell: pwsh
-        run: poetry run pytest flowfile_worker/tests --disable-warnings --durations=300 --durations-min=0.05
+        run: poetry run pytest flowfile_worker/tests --disable-warnings --durations=300 --durations-min=0.05 --junitxml=windows-junit/worker.xml -o junit_logging=no
 
       - name: Run pytest for flowfile
+        id: test-flowfile
         if: |
           needs.detect-changes.outputs.backend_flowfile == 'true' ||
           needs.detect-changes.outputs.shared == 'true' ||
           needs.detect-changes.outputs.test_workflow == 'true' ||
           github.event.inputs.run_all_tests == 'true'
         shell: pwsh
-        run: poetry run pytest flowfile/tests --disable-warnings
+        run: poetry run pytest flowfile/tests --disable-warnings --junitxml=windows-junit/flowfile.xml -o junit_logging=no
+
+      - name: Upload Windows JUnit evidence
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-junit-${{ github.run_attempt }}-pkg-other
+          path: windows-junit/*.xml
+          if-no-files-found: ignore
+          retention-days: 7
 
   # Fan-in for the three Windows shards. `backend-tests-windows` is a required
   # branch-protection context, so this job id must not change - it is the only
@@ -635,6 +706,43 @@ jobs:
             echo "All Windows shards passed."
           fi
           exit $status
+
+  # Reporting only: the existing Windows fan-in remains the required gate.
+  windows-test-report:
+    needs: [detect-changes, backend-tests-windows-core-a, backend-tests-windows-core-b, backend-tests-windows-pkg-other]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Download current-attempt Windows evidence
+        id: download
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: windows-junit-${{ github.run_attempt }}-*
+          path: windows-evidence
+      - name: Render Windows test report
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          RUN_ALL: ${{ github.event.inputs.run_all_tests }}
+          DOWNLOAD_OUTCOME: ${{ steps.download.outcome }}
+          WINDOWS_INVENTORY: >-
+            {"core-a":{"core":"backend_core"},"core-b":{"core":"backend_core"},
+            "pkg-other":{"shared":"shared","frame":"backend_frame","worker":"backend_worker","flowfile":"backend_flowfile"}}
+        run: |
+          python3 tools/windows_test_evidence.py
+          python3 tools/ci_test_summary.py windows-evidence/evidence.json windows-summary
+          cat windows-summary/test-summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload machine-readable test summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-test-summary-${{ github.run_attempt }}
+          path: windows-summary/test-summary.json
+          if-no-files-found: error
+          retention-days: 7
 
   # Kernel integration tests - runs in parallel on a separate worker
   kernel-tests:
