@@ -1,0 +1,66 @@
+{
+  "core-a": {
+    "core": {
+      "change": "backend_core",
+      "args": [
+        "flowfile_core/tests/flowfile",
+        "flowfile_core/tests/project",
+        "flowfile_core/tests/test_migration.py",
+        "-m",
+        "not kernel",
+        "--disable-warnings",
+        "--durations=300",
+        "--durations-min=0.05"
+      ]
+    }
+  },
+  "core-b": {
+    "core": {
+      "change": "backend_core",
+      "args": [
+        "flowfile_core/tests",
+        "--ignore=flowfile_core/tests/flowfile",
+        "--ignore=flowfile_core/tests/project",
+        "--ignore=flowfile_core/tests/test_migration.py",
+        "-m",
+        "not kernel",
+        "--disable-warnings",
+        "--durations=300",
+        "--durations-min=0.05"
+      ]
+    }
+  },
+  "pkg-other": {
+    "shared": {
+      "change": "shared",
+      "args": [
+        "shared/tests",
+        "--ignore=shared/tests/kafka",
+        "--disable-warnings"
+      ]
+    },
+    "frame": {
+      "change": "backend_frame",
+      "args": [
+        "flowfile_frame/tests",
+        "--disable-warnings"
+      ]
+    },
+    "worker": {
+      "change": "backend_worker",
+      "args": [
+        "flowfile_worker/tests",
+        "--disable-warnings",
+        "--durations=300",
+        "--durations-min=0.05"
+      ]
+    },
+    "flowfile": {
+      "change": "backend_flowfile",
+      "args": [
+        "flowfile/tests",
+        "--disable-warnings"
+      ]
+    }
+  }
+}

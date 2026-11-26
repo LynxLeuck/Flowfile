@@ -1,96 +1,132 @@
-"""Discover expected suites from the workflow, even when no XML was uploaded."""
+"""Plan, execute and report the Windows test matrix from one shard definition."""
 
 import json
 import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
-import yaml
-
-SHARD_PREFIX = 'backend-tests-windows-'
-JUNIT = re.compile(r'--junitxml=windows-junit/([\w-]+)\.xml(?=\s|$)')
-CHANGE = re.compile(r"needs\.detect-changes\.outputs\.([\w-]+) == 'true'")
-RUN_ALL = "github.event.inputs.run_all_tests == 'true'"
+CONFIG = Path('.github/windows-test-shards.json')
+REPORTS = Path('windows-junit')
+EVIDENCE = Path('windows-evidence')
+NAME = re.compile(r'[a-z0-9][a-z0-9-]{0,63}')
 
 
-def selected(condition, changes, run_all):
-    if not condition:
-        return True
-    values = []
-    for clause in condition.strip().removeprefix('${{').removesuffix('}}').split('||'):
-        clause = clause.strip()
-        match = CHANGE.fullmatch(clause)
-        if match:
-            values.append(changes.get(match[1]) == 'true')
-        elif clause == RUN_ALL:
-            values.append(run_all)
-        else:
-            raise ValueError(f'Unsupported Windows reporting selector: {clause!r}')
-    return any(values)
+def unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f'Duplicate configuration key: {key}')
+        result[key] = value
+    return result
 
 
-def suite_steps(job_id, definition):
-    seen = set()
-    for step in definition['steps']:
-        step_id = step.get('id', '')
-        match = JUNIT.search(step.get('run', ''))
-        if not match and not step_id.startswith('test-'):
+def make_plan(config, changes, run_all):
+    if not isinstance(config, dict) or not 1 <= len(config) <= 256:
+        raise ValueError('Configure 1–256 Windows shards')
+    if any(changes.get(key) not in {'true', 'false'} for key in ('any_backend', 'shared', 'test_workflow')):
+        raise ValueError('Missing or invalid Windows path-filter outputs')
+    force = run_all or changes.get('test_workflow') == 'true'
+    enabled = force or changes.get('any_backend') == 'true'
+    plan = {}
+    for shard, suites in config.items():
+        if not NAME.fullmatch(shard) or not isinstance(suites, dict) or not suites:
+            raise ValueError(f'Invalid shard: {shard}')
+        plan[shard] = {}
+        for suite, definition in suites.items():
+            if not NAME.fullmatch(suite) or not isinstance(definition, dict) or set(definition) != {'change', 'args'}:
+                raise ValueError(f'Invalid suite: {shard}/{suite}')
+            change, args = definition['change'], definition['args']
+            if not isinstance(change, str) or changes.get(change) not in {'true', 'false'} or not isinstance(args, list) or not args or not all(
+                isinstance(arg, str) and arg and not arg.startswith(('--junitxml', '--junit-xml')) for arg in args
+            ):
+                raise ValueError(f'Invalid change filter or pytest arguments: {shard}/{suite}')
+            plan[shard][suite] = {
+                'args': args,
+                'expected': enabled and (force or changes[change] == 'true' or changes.get('shared') == 'true'),
+            }
+    # Preserve the original behavior: when backend CI is enabled, all shards
+    # perform setup, even if a particular shard has no matching pytest suite.
+    matrix = {'include': [{'shard': shard} for shard in plan] if enabled else []}
+    return plan, matrix
+
+
+def run_suites(suites, directory):
+    directory.mkdir(exist_ok=True)
+    outcomes = {}
+    for suite, spec in suites.items():
+        if not spec['expected']:
             continue
-        if not match or not step_id.startswith('test-') or match[1] in seen:
-            raise ValueError(f'{job_id}: use a test-* step ID and a unique JUnit filename')
-        seen.add(match[1])
-        yield match[1], step
-    if not seen:
-        raise ValueError(f'{job_id}: no JUnit-producing suites found')
+        command = ['poetry', 'run', 'pytest', *spec['args'],
+                   f'--junitxml={directory / (suite + ".xml")}', '-o', 'junit_logging=no']
+        print(f'Running Windows suite: {suite}', flush=True)
+        code = subprocess.run(command, check=False).returncode
+        outcomes[suite] = 'success' if code == 0 else 'failure'
+        (directory / 'outcomes.json').write_text(json.dumps(outcomes), encoding='utf-8')
+        if code:
+            return code  # Preserve the old default success() gating of later suites.
+    return 0
 
 
-def build_evidence(needs, jobs, *, run_all, commit_sha, run_id, attempt):
-    detect = needs['detect-changes']
-    changes = detect['outputs']
+def read_metadata(path):
+    try:
+        with path.open('rb') as source:
+            value = json.loads(source.read(65537))
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def build_evidence(plan, directory, *, commit_sha, run_id, attempt, matrix_outcome, download_outcome):
     rows = []
-    shard_ids = {key for key in jobs if key.startswith(SHARD_PREFIX)}
-    if not shard_ids or shard_ids != {key for key in needs if key.startswith(SHARD_PREFIX)}:
-        raise ValueError('Windows shard jobs must match the required fan-in dependencies')
-    for job_id in sorted(shard_ids):
-        job = needs[job_id]
-        definition = jobs[job_id]
-        shard = job_id.removeprefix(SHARD_PREFIX)
-        outputs = job['outputs']
-        current = outputs.get('report_attempt') == str(attempt)
-        outcomes = json.loads(outputs.get('test_outcomes') or '{}') if current else {}
-        job_selected = selected(definition.get('if'), changes, run_all)
-        for suite, step in suite_steps(job_id, definition):
-            test_selected = selected(step.get('if'), changes, run_all)
-            expected = None if detect['result'] != 'success' else (
-                job_selected and test_selected
-            )
-            test = outcomes.get(step['id'])
-            if expected is False:
-                expectation = 'not selected'
-            elif expected is True:
-                expectation = 'expected'
-            else:
-                expectation = 'unknown'
+    for shard, suites in plan.items():
+        artifact = f'windows-junit-{attempt}-{shard}'
+        metadata = read_metadata(directory / artifact / 'shard.json')
+        outcomes = read_metadata(directory / artifact / 'outcomes.json')
+        for suite, spec in suites.items():
+            expected = spec['expected']
             rows.append({
                 'suite': suite, 'platform': 'Windows', 'shard': shard,
-                'job_outcome': job['result'], 'expectation': expectation, 'test_outcome': test,
-                'failed_phase': 'setup' if current and outputs.get('setup_failed') == 'true' else None,
-                'junit': f'windows-junit-{attempt}-{job_id}/{suite}.xml' if expected is not False else None,
+                'job_outcome': metadata.get('outcome', 'skipped' if matrix_outcome == 'skipped' else 'unknown'),
+                'expectation': 'expected' if expected else 'not selected',
+                'test_outcome': outcomes.get(suite) if expected else None,
+                'failed_phase': 'setup' if metadata.get('setup_failed') is True else None,
+                'junit': f'{artifact}/{suite}.xml' if expected else None,
             })
-    return {'commit_sha': commit_sha, 'run_id': run_id, 'attempt': attempt, 'invocations': rows}
+    return {'commit_sha': commit_sha, 'run_id': run_id, 'attempt': attempt,
+            'matrix_outcome': matrix_outcome, 'download_outcome': download_outcome, 'invocations': rows}
 
 
-def main():
-    jobs = yaml.safe_load(Path('.github/workflows/test.yaml').read_text(encoding='utf-8'))['jobs']
-    evidence = build_evidence(
-        json.loads(os.environ['NEEDS_JSON']), jobs,
-        run_all=os.environ['RUN_ALL'] == 'true', commit_sha=os.environ['GITHUB_SHA'],
-        run_id=os.environ['GITHUB_RUN_ID'], attempt=int(os.environ['GITHUB_RUN_ATTEMPT']),
-    )
-    evidence['download_outcome'] = os.environ['DOWNLOAD_OUTCOME']
-    Path('windows-evidence').mkdir(exist_ok=True)
-    Path('windows-evidence/evidence.json').write_text(json.dumps(evidence), encoding='utf-8')
+def main(mode):
+    if mode == 'plan':
+        config = json.loads(CONFIG.read_text(encoding='utf-8'), object_pairs_hook=unique_object)
+        plan, matrix = make_plan(config, json.loads(os.environ['CHANGES']), os.environ['RUN_ALL'] == 'true')
+        with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+            for key, value in {'plan': plan, 'matrix': matrix, 'selected': bool(matrix['include'])}.items():
+                print(f'{key}={json.dumps(value, separators=(",", ":"))}', file=output)
+    elif mode == 'run':
+        plan = json.loads(os.environ['WINDOWS_PLAN'])
+        return run_suites(plan[os.environ['WINDOWS_SHARD']], REPORTS)
+    elif mode == 'record':
+        dependency = os.environ['DEPENDENCY_OUTCOME']
+        test = os.environ['TEST_OUTCOME']
+        setup_failed = dependency != 'success' and test == 'skipped'
+        outcome = 'failure' if setup_failed else test
+        REPORTS.mkdir(exist_ok=True)
+        (REPORTS / 'shard.json').write_text(json.dumps({'outcome': outcome, 'setup_failed': setup_failed}), encoding='utf-8')
+    elif mode == 'report':
+        evidence = build_evidence(
+            json.loads(os.environ['WINDOWS_PLAN']), EVIDENCE, commit_sha=os.environ['GITHUB_SHA'],
+            run_id=os.environ['GITHUB_RUN_ID'], attempt=int(os.environ['GITHUB_RUN_ATTEMPT']),
+            matrix_outcome=os.environ['MATRIX_OUTCOME'], download_outcome=os.environ['DOWNLOAD_OUTCOME'],
+        )
+        EVIDENCE.mkdir(exist_ok=True)
+        (EVIDENCE / 'evidence.json').write_text(json.dumps(evidence), encoding='utf-8')
+    else:
+        raise ValueError(f'Unknown command: {mode}')
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main(sys.argv[1]))

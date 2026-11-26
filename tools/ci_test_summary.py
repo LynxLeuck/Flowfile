@@ -65,6 +65,8 @@ def main():
         '| Suite | Platform | Shard | Job | Evidence | Passed | Failed | Errors | Skipped |',
         '| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: |',
     ]
+    if evidence.get('matrix_outcome'):
+        lines[2:2] = [f"Windows matrix result: {cell(evidence['matrix_outcome'])}", '']
     if evidence.get('download_outcome') == 'failure':
         lines[2:2] = ['Artifact download failed; some test evidence may be unavailable.', '']
     failures = []

@@ -111,6 +111,7 @@ jobs:
               - 'pyproject.toml'
             test_workflow:
               - '.github/workflows/test.yaml'
+              - '.github/windows-test-shards.json'
 
   # Guard against version drift across pyproject / package.json / tauri.conf.json / Cargo.toml.
   version-sync:
@@ -398,360 +399,116 @@ jobs:
   #   start_*/stop_* step was a guaranteed no-op that still paid a full poetry +
   #   interpreter spin-up. Tests needing those services skip themselves.
   # ---------------------------------------------------------------------------
-  backend-tests-windows-core-a:
-    name: backend-tests-windows-shard (core-a)
+  windows-test-plan:
     needs: detect-changes
-    if: |
-      needs.detect-changes.outputs.any_backend == 'true' ||
-      needs.detect-changes.outputs.test_workflow == 'true' ||
-      github.event.inputs.run_all_tests == 'true'
-    runs-on: windows-latest
-    env:
-      POETRY_VIRTUALENVS_IN_PROJECT: "true"
-    outputs:
-      report_attempt: ${{ steps.report-attempt.outputs.attempt }}
-      test_outcomes: ${{ steps.report-test-outcomes.outputs.outcomes }}
-      setup_failed: ${{ steps.install-dependencies.outcome == 'failure' }}
-    steps:
-      - name: Record test report attempt
-        id: report-attempt
-        shell: pwsh
-        continue-on-error: true
-        run: '"attempt=$env:GITHUB_RUN_ATTEMPT" >> $env:GITHUB_OUTPUT'
-      - uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        id: setup-python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: 'pip'  # Enable pip caching
-
-      - name: Cache Poetry virtualenv
-        uses: actions/cache@v4
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-py${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('poetry.lock') }}
-
-      - name: Install Poetry
-        shell: pwsh
-        run: |
-          (Invoke-WebRequest -Uri https://install.python-poetry.org -UseBasicParsing).Content | python -
-          echo "$env:APPDATA\Python\Scripts" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-      # Always runs, cache hit or not — it is fast against a warm venv and self-heals
-      # any drift between the restored env and poetry.lock.
-      - name: Install Dependencies
-        id: install-dependencies
-        shell: pwsh
-        run: |
-          poetry install --no-interaction --no-ansi --with dev
-
-      - name: Run pytest for flowfile_core (shard core-a)
-        id: test-core
-        if: |
-          needs.detect-changes.outputs.backend_core == 'true' ||
-          needs.detect-changes.outputs.shared == 'true' ||
-          needs.detect-changes.outputs.test_workflow == 'true' ||
-          github.event.inputs.run_all_tests == 'true'
-        shell: pwsh
-        run: poetry run pytest flowfile_core/tests/flowfile flowfile_core/tests/project flowfile_core/tests/test_migration.py -m "not kernel" --disable-warnings --durations=300 --durations-min=0.05 --junitxml=windows-junit/core.xml -o junit_logging=no
-
-      - name: Collect test step outcomes
-        id: report-test-outcomes
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        shell: pwsh
-        env:
-          STEPS_JSON: ${{ toJSON(steps) }}
-        run: |
-          $outcomes = @{}
-          ($env:STEPS_JSON | ConvertFrom-Json -AsHashtable).GetEnumerator() | ForEach-Object {
-            if ($_.Key.StartsWith('test-')) { $outcomes[$_.Key] = $_.Value.outcome }
-          }
-          "outcomes=$($outcomes | ConvertTo-Json -Compress)" >> $env:GITHUB_OUTPUT
-
-      - name: Upload Windows JUnit evidence
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-junit-${{ github.run_attempt }}-${{ github.job }}
-          path: windows-junit/*.xml
-          if-no-files-found: ignore
-          retention-days: 7
-
-
-  backend-tests-windows-core-b:
-    name: backend-tests-windows-shard (core-b)
-    needs: detect-changes
-    if: |
-      needs.detect-changes.outputs.any_backend == 'true' ||
-      needs.detect-changes.outputs.test_workflow == 'true' ||
-      github.event.inputs.run_all_tests == 'true'
-    runs-on: windows-latest
-    env:
-      POETRY_VIRTUALENVS_IN_PROJECT: "true"
-    outputs:
-      report_attempt: ${{ steps.report-attempt.outputs.attempt }}
-      test_outcomes: ${{ steps.report-test-outcomes.outputs.outcomes }}
-      setup_failed: ${{ steps.install-dependencies.outcome == 'failure' }}
-    steps:
-      - name: Record test report attempt
-        id: report-attempt
-        shell: pwsh
-        continue-on-error: true
-        run: '"attempt=$env:GITHUB_RUN_ATTEMPT" >> $env:GITHUB_OUTPUT'
-      - uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        id: setup-python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: 'pip'  # Enable pip caching
-
-      - name: Cache Poetry virtualenv
-        uses: actions/cache@v4
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-py${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('poetry.lock') }}
-
-      - name: Install Poetry
-        shell: pwsh
-        run: |
-          (Invoke-WebRequest -Uri https://install.python-poetry.org -UseBasicParsing).Content | python -
-          echo "$env:APPDATA\Python\Scripts" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-      # Always runs, cache hit or not — it is fast against a warm venv and self-heals
-      # any drift between the restored env and poetry.lock.
-      - name: Install Dependencies
-        id: install-dependencies
-        shell: pwsh
-        run: |
-          poetry install --no-interaction --no-ansi --with dev
-
-      # The --ignore set must stay in lockstep with core-a's path list above.
-      - name: Run pytest for flowfile_core (shard core-b)
-        id: test-core
-        if: |
-          needs.detect-changes.outputs.backend_core == 'true' ||
-          needs.detect-changes.outputs.shared == 'true' ||
-          needs.detect-changes.outputs.test_workflow == 'true' ||
-          github.event.inputs.run_all_tests == 'true'
-        shell: pwsh
-        run: poetry run pytest flowfile_core/tests --ignore=flowfile_core/tests/flowfile --ignore=flowfile_core/tests/project --ignore=flowfile_core/tests/test_migration.py -m "not kernel" --disable-warnings --durations=300 --durations-min=0.05 --junitxml=windows-junit/core.xml -o junit_logging=no
-
-      - name: Collect test step outcomes
-        id: report-test-outcomes
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        shell: pwsh
-        env:
-          STEPS_JSON: ${{ toJSON(steps) }}
-        run: |
-          $outcomes = @{}
-          ($env:STEPS_JSON | ConvertFrom-Json -AsHashtable).GetEnumerator() | ForEach-Object {
-            if ($_.Key.StartsWith('test-')) { $outcomes[$_.Key] = $_.Value.outcome }
-          }
-          "outcomes=$($outcomes | ConvertTo-Json -Compress)" >> $env:GITHUB_OUTPUT
-
-      - name: Upload Windows JUnit evidence
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-junit-${{ github.run_attempt }}-${{ github.job }}
-          path: windows-junit/*.xml
-          if-no-files-found: ignore
-          retention-days: 7
-
-
-  backend-tests-windows-pkg-other:
-    name: backend-tests-windows-shard (pkg-other)
-    needs: detect-changes
-    if: |
-      needs.detect-changes.outputs.any_backend == 'true' ||
-      needs.detect-changes.outputs.test_workflow == 'true' ||
-      github.event.inputs.run_all_tests == 'true'
-    runs-on: windows-latest
-    env:
-      POETRY_VIRTUALENVS_IN_PROJECT: "true"
-    outputs:
-      report_attempt: ${{ steps.report-attempt.outputs.attempt }}
-      test_outcomes: ${{ steps.report-test-outcomes.outputs.outcomes }}
-      setup_failed: ${{ steps.install-dependencies.outcome == 'failure' }}
-    steps:
-      - name: Record test report attempt
-        id: report-attempt
-        shell: pwsh
-        continue-on-error: true
-        run: '"attempt=$env:GITHUB_RUN_ATTEMPT" >> $env:GITHUB_OUTPUT'
-      - uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        id: setup-python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: 'pip'  # Enable pip caching
-
-      - name: Cache Poetry virtualenv
-        uses: actions/cache@v4
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-py${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('poetry.lock') }}
-
-      - name: Install Poetry
-        shell: pwsh
-        run: |
-          (Invoke-WebRequest -Uri https://install.python-poetry.org -UseBasicParsing).Content | python -
-          echo "$env:APPDATA\Python\Scripts" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-      # Always runs, cache hit or not — it is fast against a warm venv and self-heals
-      # any drift between the restored env and poetry.lock.
-      - name: Install Dependencies
-        id: install-dependencies
-        shell: pwsh
-        run: |
-          poetry install --no-interaction --no-ansi --with dev
-
-      # Kafka tests need a broker; they run in test-kafka-integration.yml
-      - name: Run pytest for shared
-        id: test-shared
-        if: |
-          needs.detect-changes.outputs.shared == 'true' ||
-          needs.detect-changes.outputs.test_workflow == 'true' ||
-          github.event.inputs.run_all_tests == 'true'
-        shell: pwsh
-        run: poetry run pytest shared/tests --ignore=shared/tests/kafka --disable-warnings --junitxml=windows-junit/shared.xml -o junit_logging=no
-
-      - name: Run pytest for flowfile_frame
-        id: test-frame
-        if: |
-          needs.detect-changes.outputs.backend_frame == 'true' ||
-          needs.detect-changes.outputs.shared == 'true' ||
-          needs.detect-changes.outputs.test_workflow == 'true' ||
-          github.event.inputs.run_all_tests == 'true'
-        shell: pwsh
-        run: poetry run pytest flowfile_frame/tests --disable-warnings --junitxml=windows-junit/frame.xml -o junit_logging=no
-
-      - name: Run pytest for flowfile_worker
-        id: test-worker
-        if: |
-          needs.detect-changes.outputs.backend_worker == 'true' ||
-          needs.detect-changes.outputs.shared == 'true' ||
-          needs.detect-changes.outputs.test_workflow == 'true' ||
-          github.event.inputs.run_all_tests == 'true'
-        shell: pwsh
-        run: poetry run pytest flowfile_worker/tests --disable-warnings --durations=300 --durations-min=0.05 --junitxml=windows-junit/worker.xml -o junit_logging=no
-
-      - name: Run pytest for flowfile
-        id: test-flowfile
-        if: |
-          needs.detect-changes.outputs.backend_flowfile == 'true' ||
-          needs.detect-changes.outputs.shared == 'true' ||
-          needs.detect-changes.outputs.test_workflow == 'true' ||
-          github.event.inputs.run_all_tests == 'true'
-        shell: pwsh
-        run: poetry run pytest flowfile/tests --disable-warnings --junitxml=windows-junit/flowfile.xml -o junit_logging=no
-
-      - name: Collect test step outcomes
-        id: report-test-outcomes
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        shell: pwsh
-        env:
-          STEPS_JSON: ${{ toJSON(steps) }}
-        run: |
-          $outcomes = @{}
-          ($env:STEPS_JSON | ConvertFrom-Json -AsHashtable).GetEnumerator() | ForEach-Object {
-            if ($_.Key.StartsWith('test-')) { $outcomes[$_.Key] = $_.Value.outcome }
-          }
-          "outcomes=$($outcomes | ConvertTo-Json -Compress)" >> $env:GITHUB_OUTPUT
-
-      - name: Upload Windows JUnit evidence
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-junit-${{ github.run_attempt }}-${{ github.job }}
-          path: windows-junit/*.xml
-          if-no-files-found: ignore
-          retention-days: 7
-
-  # Fan-in for the Windows shards. Register backend-tests-windows-* jobs here;
-  # the report discovers their test-* steps and JUnit filenames from this file.
-  # `backend-tests-windows` is a required
-  # branch-protection context, so this job id must not change - it is the only
-  # thing GitHub still reports under that name.
-  #
-  # A plain `needs:` fan-in would be a false-green machine: a skipped needed job
-  # does not fail its dependents. So every result is checked explicitly, against
-  # whether the shards were supposed to run at all.
-  backend-tests-windows:
-    needs: [detect-changes, backend-tests-windows-core-a, backend-tests-windows-core-b, backend-tests-windows-pkg-other]
-    if: always()
     runs-on: ubuntu-latest
     outputs:
-      report_needs: ${{ toJSON(needs) }}
+      plan: ${{ steps.plan.outputs.plan }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      selected: ${{ steps.plan.outputs.selected }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Discover Windows shards
+        id: plan
+        env:
+          CHANGES: ${{ toJSON(needs.detect-changes.outputs) }}
+          RUN_ALL: ${{ github.event.inputs.run_all_tests }}
+        run: python3 tools/windows_test_evidence.py plan
+
+  windows-test-shards:
+    name: backend-tests-windows-shard (${{ matrix.shard }})
+    needs: windows-test-plan
+    if: needs.windows-test-plan.outputs.selected == 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.windows-test-plan.outputs.matrix) }}
+    runs-on: windows-latest
+    env:
+      POETRY_VIRTUALENVS_IN_PROJECT: "true"
+      WINDOWS_PLAN: ${{ needs.windows-test-plan.outputs.plan }}
+      WINDOWS_SHARD: ${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        id: setup-python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: 'pip'  # Enable pip caching
+
+      - name: Cache Poetry virtualenv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('poetry.lock') }}
+
+      - name: Install Poetry
+        shell: pwsh
+        run: |
+          (Invoke-WebRequest -Uri https://install.python-poetry.org -UseBasicParsing).Content | python -
+          echo "$env:APPDATA\Python\Scripts" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      # Always runs, cache hit or not — it is fast against a warm venv and self-heals
+      # any drift between the restored env and poetry.lock.
+      - name: Install Dependencies
+        id: install-dependencies
+        shell: pwsh
+        run: |
+          poetry install --no-interaction --no-ansi --with dev
+
+      - name: Run selected pytest suites
+        id: tests
+        shell: pwsh
+        run: python tools/windows_test_evidence.py run
+
+      - name: Record shard evidence
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        shell: pwsh
+        env:
+          TEST_OUTCOME: ${{ steps.tests.outcome }}
+          DEPENDENCY_OUTCOME: ${{ steps.install-dependencies.outcome }}
+        run: python tools/windows_test_evidence.py record
+
+      - name: Upload Windows test evidence
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-junit-${{ github.run_attempt }}-${{ matrix.shard }}
+          path: windows-junit/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # Stable required check; artifact availability never decides its result.
+  backend-tests-windows:
+    needs: [detect-changes, windows-test-plan, windows-test-shards]
+    if: always()
+    runs-on: ubuntu-latest
     steps:
       - name: Check Windows shard results
         env:
           DETECT: ${{ needs.detect-changes.result }}
-          SHARD_NEEDS: ${{ toJSON(needs) }}
-          # Same expression as each shard's job-level `if:`. When it is false the
-          # path filters excluded the whole group (e.g. a docs-only change) and
-          # skipped shards are the correct, passing outcome.
-          SHARDS_EXPECTED: ${{ needs.detect-changes.outputs.any_backend == 'true' || needs.detect-changes.outputs.test_workflow == 'true' || github.event.inputs.run_all_tests == 'true' }}
+          PLAN: ${{ needs.windows-test-plan.result }}
+          SELECTED: ${{ needs.windows-test-plan.outputs.selected }}
+          MATRIX: ${{ needs.windows-test-shards.result }}
+          EXPECTED: ${{ needs.detect-changes.outputs.any_backend == 'true' || needs.detect-changes.outputs.test_workflow == 'true' || github.event.inputs.run_all_tests == 'true' }}
         run: |
-          echo "=== Windows shard results ==="
-          echo "  detect-changes: $DETECT"
-          echo "  shards expected to run: $SHARDS_EXPECTED"
-          shards=$(jq -er '[to_entries[] | select(.key | startswith("backend-tests-windows-")) | "\(.key):\(.value.result)"] | if length == 0 then error("No Windows shard dependencies") else .[] end' <<< "$SHARD_NEEDS") || exit 1
-          mapfile -t results <<< "$shards"
-          printf '  %s\n' "${results[@]}"
-          echo ""
-
-          # Without a trustworthy detect-changes there is no trustworthy
-          # SHARDS_EXPECTED, so its own result is part of the gate.
-          if [[ "$DETECT" != "success" ]]; then
-            echo "ERROR: detect-changes result is '$DETECT' - cannot verify the shards."
+          if [[ "$DETECT" == success && "$PLAN" == success ]] &&
+             { [[ "$EXPECTED/$SELECTED/$MATRIX" == true/true/success ]] ||
+               [[ "$EXPECTED/$SELECTED/$MATRIX" == false/false/skipped ]]; }; then
+            echo "Windows check passed (matrix: $MATRIX)."
+          else
+            echo "Windows check failed: detect=$DETECT plan=$PLAN expected=$EXPECTED selected=$SELECTED matrix=$MATRIX"
             exit 1
           fi
 
-          if [[ "$SHARDS_EXPECTED" != "true" ]]; then
-            for shard in "${results[@]}"; do
-              if [[ "${shard#*:}" != "skipped" ]]; then
-                echo "ERROR: no Windows shard should have run, but '$shard' did."
-                exit 1
-              fi
-            done
-            echo "No backend changes - all Windows shards skipped by path filters."
-            exit 0
-          fi
-
-          # Shards were expected to run, so only 'success' passes. 'failure',
-          # 'cancelled' and 'skipped' are all red: a shard that never ran proves
-          # nothing, and reporting it green is exactly the false-green trap this
-          # job exists to close.
-          status=0
-          for shard in "${results[@]}"; do
-            if [[ "${shard#*:}" != "success" ]]; then
-              echo "ERROR: Windows shard '${shard%%:*}' reported '${shard#*:}' (expected 'success')."
-              status=1
-            fi
-          done
-
-          if [[ $status -eq 0 ]]; then
-            echo "All Windows shards passed."
-          fi
-          exit $status
-
-  # Reporting only: the existing Windows fan-in remains the required gate.
   windows-test-report:
-    needs: backend-tests-windows
-    if: ${{ !cancelled() }}
+    needs: [windows-test-plan, windows-test-shards]
+    if: ${{ !cancelled() && needs.windows-test-plan.result == 'success' }}
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -765,17 +522,13 @@ jobs:
         with:
           pattern: windows-junit-${{ github.run_attempt }}-*
           path: windows-evidence
-      - name: Set up report parser
-        run: |
-          python3 -m venv "$RUNNER_TEMP/report-venv"
-          "$RUNNER_TEMP/report-venv/bin/python" -m pip install --only-binary=:all: PyYAML==6.0.3
       - name: Render Windows test report
         env:
-          NEEDS_JSON: ${{ needs.backend-tests-windows.outputs.report_needs }}
-          RUN_ALL: ${{ github.event.inputs.run_all_tests }}
+          WINDOWS_PLAN: ${{ needs.windows-test-plan.outputs.plan }}
+          MATRIX_OUTCOME: ${{ needs.windows-test-shards.result }}
           DOWNLOAD_OUTCOME: ${{ steps.download.outcome }}
         run: |
-          "$RUNNER_TEMP/report-venv/bin/python" tools/windows_test_evidence.py
+          python3 tools/windows_test_evidence.py report
           python3 tools/ci_test_summary.py windows-evidence/evidence.json windows-summary
           cat windows-summary/test-summary.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload machine-readable test summary
@@ -1048,7 +801,7 @@ jobs:
           echo "Job results:"
           echo "  - Backend Tests: ${{ needs.backend-tests.result }}"
           echo "  - Coverage: ${{ needs.coverage.result }}"
-          echo "  - Backend Tests (Windows, 3-shard fan-in): ${{ needs.backend-tests-windows.result }}"
+          echo "  - Backend Tests (Windows shard matrix): ${{ needs.backend-tests-windows.result }}"
           echo "  - Kernel Tests: ${{ needs.kernel-tests.result }}"
           echo "  - Stub Drift: ${{ needs.check-stubs.result }}"
           echo "  - Formula Docs Drift: ${{ needs.check-formula-docs.result }}"

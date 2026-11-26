@@ -7,94 +7,90 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tools.windows_test_evidence import build_evidence
+from tools.windows_test_evidence import build_evidence, make_plan, run_suites, unique_object
 
-WORKFLOW = Path(__file__).resolve().parents[2] / '.github/workflows/test.yaml'
-
-
-def workflow_jobs():
-    return yaml.safe_load(WORKFLOW.read_text(encoding='utf-8'))['jobs']
+ROOT = Path(__file__).resolve().parents[2]
+CHANGES = dict.fromkeys(('any_backend', 'backend_core', 'backend_worker', 'backend_frame', 'backend_flowfile',
+                         'shared', 'test_workflow'), 'false')
 
 
-def manifest(needs, jobs, run_all=False):
-    return build_evidence(needs, jobs, run_all=run_all, commit_sha='abc', run_id='42', attempt=2)
-
-
-def needs_for(jobs, detect_result='success', changes=None):
-    gate = jobs['backend-tests-windows']
-    needs = {key: {'result': 'skipped', 'outputs': {}} for key in gate['needs']}
-    needs['detect-changes'] = {'result': detect_result, 'outputs': changes or {}}
-    return needs
-
-
-@pytest.mark.parametrize(('detect_result', 'changes', 'run_all', 'expected'), [
-    ('success', {}, False, set()),
-    ('success', {'any_backend': 'true', 'backend_core': 'true'}, False, {'core'}),
-    ('success', {'any_backend': 'true', 'shared': 'true'}, False, {'core', 'worker'}),
-    ('success', {'test_workflow': 'true'}, False, {'core', 'worker'}),
-    ('success', {}, True, {'core', 'worker'}),
-    ('failure', {}, True, set()),
+@pytest.mark.parametrize(('flags', 'run_all', 'expected'), [
+    ({}, False, set()),
+    ({'any_backend': 'true', 'backend_core': 'true'}, False, {('core-a', 'core'), ('core-b', 'core')}),
+    ({'any_backend': 'true', 'backend_worker': 'true'}, False, {('pkg-other', 'worker')}),
+    ({'any_backend': 'true', 'shared': 'true'}, False, None),
+    ({'test_workflow': 'true'}, False, None),
+    ({}, True, None),
 ])
-def test_workflow_discovery_and_path_filters(detect_result, changes, run_all, expected):
-    flags = " || needs.detect-changes.outputs.test_workflow == 'true' || github.event.inputs.run_all_tests == 'true'"
-    jobs = {}
-    for suite in ('core', 'worker'):
-        jobs[f'backend-tests-windows-{suite}'] = {
-            'if': "needs.detect-changes.outputs.any_backend == 'true'" + flags,
-            'steps': [{
-                'id': f'test-{suite}', 'run': f'pytest --junitxml=windows-junit/{suite}.xml',
-                'if': f"needs.detect-changes.outputs.backend_{suite} == 'true' || "
-                      "needs.detect-changes.outputs.shared == 'true'" + flags,
-            }],
-        }
-    jobs['backend-tests-windows'] = {'needs': ['detect-changes', *jobs]}
-    rows = manifest(needs_for(jobs, detect_result, changes), jobs, run_all)['invocations']
-    assert len(rows) == 2
-    assert {row['suite'] for row in rows if row['expectation'] == 'expected'} == expected
-    if detect_result == 'failure':
-        assert {row['expectation'] for row in rows} == {'unknown'}
+def test_selection_preserves_old_windows_filters(flags, run_all, expected):
+    config = json.loads((ROOT / '.github/windows-test-shards.json').read_text(encoding='utf-8'))
+    plan, matrix = make_plan(config, {**CHANGES, **flags}, run_all)
+    assert matrix['include'] == ([{'shard': key} for key in config] if flags or run_all else [])
+    assert {(key, suite) for key, suites in plan.items() for suite, spec in suites.items() if spec['expected']} == (
+        expected if expected is not None else {(key, suite) for key, suites in config.items() for suite in suites}
+    )
 
 
-def test_renamed_shard_and_added_suite_need_no_separate_inventory():
-    jobs = workflow_jobs()
-    gate = jobs['backend-tests-windows']
-    old = next(job for job in gate['needs'] if job.startswith('backend-tests-windows-'))
-    new = 'backend-tests-windows-renamed'
-    jobs[new] = jobs.pop(old)
-    jobs[new]['steps'].append({'id': 'test-extra', 'run': 'pytest --junitxml=windows-junit/extra.xml'})
-    with pytest.raises(ValueError, match='match the required fan-in'):
-        manifest(needs_for(jobs), jobs)
-    gate['needs'][gate['needs'].index(old)] = new
-    needs = needs_for(jobs)
-    needs[new] = {'result': 'failure', 'outputs': {
-        'report_attempt': '2', 'test_outcomes': '{"test-extra":"skipped"}', 'setup_failed': 'true',
-    }}
-    row = next(row for row in manifest(needs, jobs, True)['invocations'] if row['suite'] == 'extra')
-    assert row['shard'] == 'renamed'
-    assert row['junit'] == f'windows-junit-2-{new}/extra.xml'
-    assert row['test_outcome'] == 'skipped'
-    assert row['failed_phase'] == 'setup'
-    needs[new]['outputs']['report_attempt'] = '1'
-    row = next(row for row in manifest(needs, jobs, True)['invocations'] if row['suite'] == 'extra')
-    assert row['test_outcome'] is None
-    assert row['failed_phase'] is None
+def test_new_shard_is_scheduled_and_current_attempt_missing_evidence_remains_visible(tmp_path):
+    config = {'new-shard': {'new-suite': {'change': 'shared', 'args': ['shared/tests']}}}
+    plan, matrix = make_plan(config, CHANGES, True)
+    assert matrix == {'include': [{'shard': 'new-shard'}]}
+    stale = tmp_path / 'windows-junit-1-new-shard'
+    stale.mkdir()
+    (stale / 'shard.json').write_text('{"outcome":"success"}', encoding='utf-8')
+    params = dict(commit_sha='abc', run_id='42', attempt=2, matrix_outcome='failure', download_outcome='success')
+    row, = build_evidence(plan, tmp_path, **params)['invocations']
+    assert (row['expectation'], row['job_outcome'], row['junit']) == (
+        'expected', 'unknown', 'windows-junit-2-new-shard/new-suite.xml',
+    )
+    current = tmp_path / 'windows-junit-2-new-shard'
+    current.mkdir()
+    (current / 'shard.json').write_text('{"outcome":"failure","setup_failed":true}', encoding='utf-8')
+    row, = build_evidence(plan, tmp_path, **params)['invocations']
+    assert (row['job_outcome'], row['failed_phase']) == ('failure', 'setup')
 
 
-@pytest.mark.parametrize(('detect', 'selected', 'statuses', 'code'), [
-    ('success', 'true', ['success', 'success'], 0),
-    ('success', 'true', ['success', 'failure'], 1),
-    ('success', 'true', ['success', 'cancelled'], 1),
-    ('success', 'true', ['success', 'skipped'], 1),
-    ('success', 'false', ['skipped', 'skipped'], 0),
-    ('success', 'false', ['skipped', 'success'], 1),
-    ('failure', 'false', ['skipped', 'skipped'], 1),
-    ('success', 'true', [], 1),
+@pytest.mark.parametrize('config', [{}, {'../bad': {}}, {'empty': {}},
+                                   {'valid': {'suite': {'change': 'unknown', 'args': ['tests']}}}])
+def test_invalid_inventory_fails_even_on_docs_only(config):
+    with pytest.raises(ValueError):
+        make_plan(config, CHANGES, False)
+
+
+def test_duplicate_config_key_is_rejected():
+    with pytest.raises(ValueError, match='Duplicate'):
+        json.loads('{"shard":{},"shard":{}}', object_pairs_hook=unique_object)
+
+
+def test_runner_preserves_arguments_and_stops_after_failed_suite(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_run(command, *, check):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 1)
+
+    monkeypatch.setattr(subprocess, 'run', fake_run)
+    args = ['flowfile_core/tests', '-m', 'not kernel']
+    suites = {key: {'expected': key != 'first', 'args': args} for key in ('first', 'second', 'third')}
+    assert run_suites(suites, tmp_path) == 1
+    assert calls == [['poetry', 'run', 'pytest', *args, f'--junitxml={tmp_path / "second.xml"}', '-o', 'junit_logging=no']]
+    assert json.loads((tmp_path / 'outcomes.json').read_text(encoding='utf-8')) == {'second': 'failure'}
+
+
+@pytest.mark.parametrize(('detect', 'plan', 'expected', 'selected', 'matrix', 'code'), [
+    ('success', 'success', 'true', 'true', 'success', 0),
+    ('success', 'success', 'true', 'true', 'failure', 1),
+    ('success', 'success', 'true', 'true', 'cancelled', 1),
+    ('success', 'success', 'true', 'false', 'skipped', 1),
+    ('success', 'success', 'false', 'false', 'skipped', 0),
+    ('success', 'failure', 'false', '', 'skipped', 1),
+    ('failure', 'skipped', 'false', '', 'skipped', 1),
 ])
-@pytest.mark.skipif(not (shutil.which('bash') and shutil.which('jq')), reason='requires the Actions gate tools')
-def test_required_gate_uses_declared_shard_dependencies(detect, selected, statuses, code):
-    gate_script = workflow_jobs()['backend-tests-windows']['steps'][0]['run']
-    needs = {f'backend-tests-windows-shard-{i}': {'result': status} for i, status in enumerate(statuses)}
-    result = subprocess.run(['bash', '-e', '-c', gate_script], env={
-        **os.environ, 'DETECT': detect, 'SHARDS_EXPECTED': selected, 'SHARD_NEEDS': json.dumps(needs),
+@pytest.mark.skipif(not shutil.which('bash'), reason='requires the Actions gate shell')
+def test_stable_gate_uses_native_matrix_result(detect, plan, expected, selected, matrix, code):
+    jobs = yaml.safe_load((ROOT / '.github/workflows/test.yaml').read_text(encoding='utf-8'))['jobs']
+    script = jobs['backend-tests-windows']['steps'][0]['run']
+    result = subprocess.run(['bash', '-e', '-c', script], env={
+        **os.environ, 'DETECT': detect, 'PLAN': plan, 'EXPECTED': expected, 'SELECTED': selected, 'MATRIX': matrix,
     }, capture_output=True, text=True)
     assert result.returncode == code, result.stderr
