@@ -209,7 +209,17 @@ jobs:
           needs.detect-changes.outputs.test_workflow == 'true' ||
           github.event.inputs.run_all_tests == 'true'
         # Kafka tests need a broker; they run in test-kafka-integration.yml
-        run: poetry run pytest shared/tests --ignore=shared/tests/kafka --disable-warnings
+        run: poetry run pytest shared/tests --ignore=shared/tests/kafka --disable-warnings --junitxml=ci-junit/shared.xml -o junit_logging=no
+
+      - name: Upload shared pytest evidence
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-junit-${{ github.run_attempt }}-linux-backend-${{ strategy.job-index }}
+          path: ci-junit/*.xml
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Run pytest for flowfile_frame
         if: |
@@ -478,7 +488,7 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: windows-junit-${{ github.run_attempt }}-${{ matrix.shard }}
+          name: test-junit-${{ github.run_attempt }}-windows-${{ matrix.shard }}
           path: windows-junit/
           if-no-files-found: ignore
           retention-days: 7
@@ -507,7 +517,7 @@ jobs:
           fi
 
   windows-test-report:
-    needs: [windows-test-plan, windows-test-shards]
+    needs: [windows-test-plan, windows-test-shards, backend-tests]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -518,12 +528,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Download current-attempt Windows evidence
+      - name: Download current-attempt JUnit evidence
         id: download
         uses: actions/download-artifact@v4
         continue-on-error: true
         with:
-          pattern: windows-junit-${{ github.run_attempt }}-*
+          pattern: test-junit-${{ github.run_attempt }}-*
           path: windows-evidence
       - name: Render Windows test report
         env:

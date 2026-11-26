@@ -80,20 +80,36 @@ def read_metadata(path):
 
 def build_evidence(plan, directory, *, commit_sha, run_id, attempt, matrix_outcome, download_outcome):
     rows = []
+    claimed = set()
     for shard, suites in plan.items():
-        artifact = f'windows-junit-{attempt}-{shard}'
+        artifact = f'test-junit-{attempt}-windows-{shard}'
         metadata = read_metadata(directory / artifact / 'shard.json')
         outcomes = read_metadata(directory / artifact / 'outcomes.json')
         for suite, spec in suites.items():
             expected = spec['expected']
+            junit = f'{artifact}/{suite}.xml'
+            claimed.add(junit)
             rows.append({
                 'suite': suite, 'platform': 'Windows', 'shard': shard,
                 'job_outcome': metadata.get('outcome', 'skipped' if matrix_outcome == 'skipped' else 'unknown'),
                 'expectation': 'expected' if expected else 'not selected',
                 'test_outcome': outcomes.get(suite) if expected else None,
                 'failed_phase': 'setup' if metadata.get('setup_failed') is True else None,
-                'junit': f'{artifact}/{suite}.xml' if expected else None,
+                'junit': junit if expected else None, 'artifact_name': artifact,
             })
+    prefix = f'test-junit-{attempt}-'
+    for artifact in sorted(directory.glob(f'{prefix}*')):
+        if not artifact.is_dir() or artifact.is_symlink():
+            continue
+        for path in sorted(artifact.rglob('*.xml')):
+            relative = path.relative_to(directory).as_posix()
+            if relative not in claimed and path.is_file():
+                rows.append({
+                    'suite': path.relative_to(artifact).with_suffix('').as_posix(),
+                    'platform': 'unknown', 'shard': artifact.name.removeprefix(prefix),
+                    'job_outcome': 'unknown', 'expectation': 'observed',
+                    'junit': relative, 'artifact_name': artifact.name,
+                })
     return {'commit_sha': commit_sha, 'run_id': run_id, 'attempt': attempt,
             'matrix_outcome': matrix_outcome, 'download_outcome': download_outcome, 'invocations': rows}
 
@@ -113,13 +129,13 @@ def attach_github_observations(evidence, jobs, artifacts, run_url):
         by_name.setdefault(job['name'], []).append(job)
     artifact_ids = {item['name']: item['id'] for item in artifacts if type(item.get('id')) is int}
     for row in evidence['invocations']:
-        matches = by_name.get(f"backend-tests-windows-shard ({row['shard']})", [])
+        matches = by_name.get(f"backend-tests-windows-shard ({row['shard']})", []) if row['platform'] == 'Windows' else []
         # A skipped matrix may have only a parent placeholder, not one job per shard.
         if len(matches) == 1:
             job, = matches
             row['job_url'] = job['url']
             row['job_outcome'] = job['conclusion'] or 'unknown'
-        name = f"windows-junit-{evidence['attempt']}-{row['shard']}"
+        name = row['artifact_name']
         if name in artifact_ids:
             row['artifact_url'] = f'{run_url}/artifacts/{artifact_ids[name]}'
 

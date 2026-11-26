@@ -35,19 +35,31 @@ def test_new_shard_is_scheduled_and_current_attempt_missing_evidence_remains_vis
     config = {'new-shard': {'new-suite': {'change': 'shared', 'args': ['shared/tests']}}}
     plan, matrix = make_plan(config, CHANGES, True)
     assert matrix == {'include': [{'shard': 'new-shard'}]}
-    stale = tmp_path / 'windows-junit-1-new-shard'
+    stale = tmp_path / 'test-junit-1-windows-new-shard'
     stale.mkdir()
     (stale / 'shard.json').write_text('{"outcome":"success"}', encoding='utf-8')
     params = dict(commit_sha='abc', run_id='42', attempt=2, matrix_outcome='failure', download_outcome='success')
     row, = build_evidence(plan, tmp_path, **params)['invocations']
     assert (row['expectation'], row['job_outcome'], row['junit']) == (
-        'expected', 'unknown', 'windows-junit-2-new-shard/new-suite.xml',
+        'expected', 'unknown', 'test-junit-2-windows-new-shard/new-suite.xml',
     )
-    current = tmp_path / 'windows-junit-2-new-shard'
+    current = tmp_path / 'test-junit-2-windows-new-shard'
     current.mkdir()
     (current / 'shard.json').write_text('{"outcome":"failure","setup_failed":true}', encoding='utf-8')
     row, = build_evidence(plan, tmp_path, **params)['invocations']
     assert (row['job_outcome'], row['failed_phase']) == ('failure', 'setup')
+
+
+def test_discovers_nested_junit_without_inventory_and_ignores_other_attempts(tmp_path):
+    for artifact in ('test-junit-2-brand-new-check', 'test-junit-1-old', 'unrelated'):
+        directory = tmp_path / artifact / 'nested'
+        directory.mkdir(parents=True)
+        (directory / 'new-suite.xml').write_text('<testsuite/>', encoding='utf-8')
+    row, = build_evidence({}, tmp_path, commit_sha='abc', run_id='42', attempt=2,
+                          matrix_outcome='skipped', download_outcome='success')['invocations']
+    assert (row['suite'], row['shard'], row['expectation'], row['job_outcome']) == (
+        'nested/new-suite', 'brand-new-check', 'observed', 'unknown',
+    )
 
 
 @pytest.mark.parametrize('config', [{}, {'../bad': {}}, {'empty': {}},
