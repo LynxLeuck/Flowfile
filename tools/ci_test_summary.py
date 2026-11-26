@@ -9,6 +9,7 @@ import json
 import string
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from urllib.parse import quote
 
 MAX_REPORT_BYTES = 16 * 1024 * 1024
 
@@ -69,6 +70,8 @@ def main():
         lines[2:2] = [f"Windows matrix result: {cell(evidence['matrix_outcome'])}", '']
     if evidence.get('download_outcome') == 'failure':
         lines[2:2] = ['Artifact download failed; some test evidence may be unavailable.', '']
+    if evidence.get('run_url'):
+        lines[2:2] = [link('GitHub Actions run', evidence['run_url']), '']
     failures = []
     for invocation in evidence['invocations']:
         status, counts, problems = junit_result(args.evidence.resolve().parent, invocation.get('junit'))
@@ -82,10 +85,19 @@ def main():
         elif row.get('test_outcome'):
             label = f"Test step {row['test_outcome']} · {label}"
         values = [row[key] for key in ('suite', 'platform', 'shard', 'job_outcome')]
-        lines.append('| ' + ' | '.join(map(cell, [*values, label, *(counts.values() if counts is not None else ['—'] * 4)])) + ' |')
+        columns = list(map(cell, [*values, label, *(counts.values() if counts is not None else ['—'] * 4)]))
+        if row.get('job_url'):
+            columns[3] += ' · ' + link('job', row['job_url'])
+        if row.get('artifact_url'):
+            columns[4] += ' · ' + link('artifact', row['artifact_url'])
+        lines.append('| ' + ' | '.join(columns) + ' |')
         for problem in problems[:10]:
             name = '.'.join(filter(None, (problem['classname'], problem['name'])))
             failures.append(f"- {cell(row['shard'])} / {cell(row['suite'])}: {cell(name)} ({cell(problem['outcome'])})")
+    if evidence.get('observed_jobs'):
+        lines.extend(['', '## GitHub Actions jobs observed at report time', ''])
+        for job in evidence['observed_jobs']:
+            lines.append(f"- {link(job['name'], job['url'])}: {cell(job['conclusion'] or job['status'])}")
     if failures:
         lines.extend(['', '## Test failures and errors', '', *failures])
     args.output.mkdir(parents=True, exist_ok=True)
@@ -93,6 +105,12 @@ def main():
         json.dumps({**evidence, 'schema_version': 1, 'invocations': rows}, indent=2) + '\n', encoding='utf-8'
     )
     (args.output / 'test-summary.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+
+
+def link(label, url):
+    if not url.startswith(('https://', 'http://')):
+        return cell(label)
+    return f"[{cell(label)}]({quote(url, safe=':/%')})"
 
 
 if __name__ == '__main__':

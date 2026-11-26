@@ -98,6 +98,44 @@ def build_evidence(plan, directory, *, commit_sha, run_id, attempt, matrix_outco
             'matrix_outcome': matrix_outcome, 'download_outcome': download_outcome, 'invocations': rows}
 
 
+def attach_github_observations(evidence, jobs, artifacts, run_url):
+    """Describe native observations without promoting absent observations to success."""
+    evidence['run_url'] = run_url
+    evidence['observed_jobs'] = [
+        {'name': job['name'], 'status': job['status'], 'conclusion': job['conclusion'],
+         'url': job.get('html_url') or f"{run_url}/job/{job['id']}",
+         'steps': [{key: step[key] for key in ('name', 'status', 'conclusion')}
+                   for step in job.get('steps', [])]}
+        for job in jobs if type(job.get('id')) is int
+    ]
+    by_name = {}
+    for job in evidence['observed_jobs']:
+        by_name.setdefault(job['name'], []).append(job)
+    artifact_ids = {item['name']: item['id'] for item in artifacts if type(item.get('id')) is int}
+    for row in evidence['invocations']:
+        matches = by_name.get(f"backend-tests-windows-shard ({row['shard']})", [])
+        # A skipped matrix may have only a parent placeholder, not one job per shard.
+        if len(matches) == 1:
+            job, = matches
+            row['job_url'] = job['url']
+            row['job_outcome'] = job['conclusion'] or 'unknown'
+        name = f"windows-junit-{evidence['attempt']}-{row['shard']}"
+        if name in artifact_ids:
+            row['artifact_url'] = f'{run_url}/artifacts/{artifact_ids[name]}'
+
+
+def github_pages(endpoint, key):
+    try:
+        result = subprocess.run(
+            ['gh', 'api', '--paginate', endpoint, '--jq', f'.{key}[] | @json'],
+            check=True, capture_output=True, text=True, timeout=30,
+        )
+        return [json.loads(line) for line in result.stdout.splitlines()]
+    except (OSError, ValueError, subprocess.SubprocessError):
+        print(f'::warning::GitHub {key} metadata unavailable; reporting from available evidence')
+        return None
+
+
 def main(mode):
     if mode == 'plan':
         config = json.loads(CONFIG.read_text(encoding='utf-8'), object_pairs_hook=unique_object)
@@ -117,10 +155,17 @@ def main(mode):
         (REPORTS / 'shard.json').write_text(json.dumps({'outcome': outcome, 'setup_failed': setup_failed}), encoding='utf-8')
     elif mode == 'report':
         evidence = build_evidence(
-            json.loads(os.environ['WINDOWS_PLAN']), EVIDENCE, commit_sha=os.environ['GITHUB_SHA'],
+            json.loads(os.environ['WINDOWS_PLAN'] or '{}'), EVIDENCE, commit_sha=os.environ['GITHUB_SHA'],
             run_id=os.environ['GITHUB_RUN_ID'], attempt=int(os.environ['GITHUB_RUN_ATTEMPT']),
             matrix_outcome=os.environ['MATRIX_OUTCOME'], download_outcome=os.environ['DOWNLOAD_OUTCOME'],
         )
+        repository = os.environ['GITHUB_REPOSITORY']
+        run_url = f"{os.environ['GITHUB_SERVER_URL']}/{repository}/actions/runs/{evidence['run_id']}"
+        endpoint = f"repos/{repository}/actions/runs/{evidence['run_id']}"
+        jobs = github_pages(f"{endpoint}/attempts/{evidence['attempt']}/jobs?per_page=100", 'jobs')
+        artifacts = github_pages(f'{endpoint}/artifacts?per_page=100', 'artifacts')
+        attach_github_observations(evidence, jobs or [], artifacts or [], run_url)
+        evidence['github_metadata'] = {'jobs_available': jobs is not None, 'artifacts_available': artifacts is not None}
         EVIDENCE.mkdir(exist_ok=True)
         (EVIDENCE / 'evidence.json').write_text(json.dumps(evidence), encoding='utf-8')
     else:

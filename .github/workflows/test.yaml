@@ -508,9 +508,12 @@ jobs:
 
   windows-test-report:
     needs: [windows-test-plan, windows-test-shards]
-    if: ${{ !cancelled() && needs.windows-test-plan.result == 'success' }}
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     continue-on-error: true
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -524,6 +527,7 @@ jobs:
           path: windows-evidence
       - name: Render Windows test report
         env:
+          GH_TOKEN: ${{ github.token }}
           WINDOWS_PLAN: ${{ needs.windows-test-plan.outputs.plan }}
           MATRIX_OUTCOME: ${{ needs.windows-test-shards.result }}
           DOWNLOAD_OUTCOME: ${{ steps.download.outcome }}
